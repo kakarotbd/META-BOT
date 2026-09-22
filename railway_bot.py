@@ -4,8 +4,13 @@ import os
 from dotenv import load_dotenv
 from firebase_store import EncryptedFirestore
 from bot_core import ModeratorBot
+from app_config import APP_CONFIG
 
 load_dotenv()
+if APP_CONFIG.logo_path.is_file():
+    print(f"{APP_CONFIG.bot_app_name}: logo asset found at {APP_CONFIG.logo_path.relative_to(APP_CONFIG.logo_path.parent.parent)}", flush=True)
+else:
+    print(f"{APP_CONFIG.bot_app_name}: logo asset missing at {APP_CONFIG.logo_path}; Railway will run headlessly.", flush=True)
 store = EncryptedFirestore()
 
 def log(message):

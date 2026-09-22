@@ -1,0 +1,4 @@
+# Shared public application metadata. Used by bot.py and railway_bot.py.
+# Keep secrets (Discord token, Firebase key) in .env / Railway Variables, never here.
+BOT_APP_NAME=META BOT
+LOGO_PATH=assets/logo.png

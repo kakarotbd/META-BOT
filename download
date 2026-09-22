@@ -1,0 +1,6 @@
+.env
+firebase-service-account.json
+bot_config.json
+link_warnings.json
+__pycache__/
+*.pyc
