@@ -19,6 +19,7 @@ class AppConfig:
     bot_app_name: str
     logo_path: Path
     admin_user_id: int
+    allowed_guild_id: int
 
 
 def load_app_config(config_path=CONFIG_PATH):
@@ -53,10 +54,18 @@ def load_app_config(config_path=CONFIG_PATH):
     if admin_user_id <= 0:
         raise RuntimeError("ADMIN_USER_ID environment variable must be a positive Discord ID.")
 
+    allowed_guild_id_text = os.getenv("ALLOWED_GUILD_ID", "").strip()
+    try:
+        allowed_guild_id = int(allowed_guild_id_text)
+    except ValueError as exc:
+        raise RuntimeError("ALLOWED_GUILD_ID environment variable must be a numeric Discord server ID.") from exc
+    if allowed_guild_id <= 0:
+        raise RuntimeError("ALLOWED_GUILD_ID environment variable must be a positive Discord ID.")
+
     logo_path = (PROJECT_ROOT / values["LOGO_PATH"]).resolve()
     if PROJECT_ROOT not in logo_path.parents:
         raise RuntimeError("LOGO_PATH must stay inside this project folder.")
-    return AppConfig(values["BOT_APP_NAME"], logo_path, admin_user_id)
+    return AppConfig(values["BOT_APP_NAME"], logo_path, admin_user_id, allowed_guild_id)
 
 
 APP_CONFIG = load_app_config()

@@ -1,15 +1,18 @@
-"""Desktop GUI control panel. Settings, warnings, and logs are shared through encrypted Firebase."""
+﻿"""Desktop GUI control panel. Settings, warnings, and logs are shared through encrypted Cloudflare R2."""
 import asyncio, calendar, io, os, queue, threading, uuid, webbrowser
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from tzlocal import get_localzone_name
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
-from PIL import Image, ImageTk
+from PIL import Image, ImageSequence, ImageTk
 from dotenv import load_dotenv
 from bot_core import ModeratorBot, DEFAULT_TICKET_CLOSE_NOTE
-from firebase_store import EncryptedFirestore
+from d1_store import CloudflareD1Store
 from app_config import APP_CONFIG
 load_dotenv()
+
+MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024  # Non-GIF limit only; original GIFs are stored in R2.
+MAX_STORED_IMAGE_BYTES = 490_000
 
 class App:
     BG, PANEL, TEXT, MUTED, ACCENT, SUCCESS = "#0b1020", "#141b2d", "#f3f4f6", "#a7b0c3", "#5865f2", "#43b581"
@@ -123,7 +126,7 @@ class App:
             except Exception:
                 self.logo_image = None
         tk.Label(header, text=APP_CONFIG.bot_app_name, bg=self.PANEL, fg=self.TEXT, font=("Segoe UI", 14, "bold")).pack(side="left", padx=18 if not getattr(self, "logo_image", None) else 0)
-        self.header_subtitle = tk.Label(header, text="Shared Firebase control panel", bg=self.PANEL, fg=self.MUTED, font=("Segoe UI", 9))
+        self.header_subtitle = tk.Label(header, text="Shared Cloudflare R2 control panel", bg=self.PANEL, fg=self.MUTED, font=("Segoe UI", 9))
         self.header_subtitle.pack(side="left", padx=(4, 0))
         self.header_status = tk.Label(header, text="OFFLINE", bg="#2a1830", fg="#ff7b8a", font=("Segoe UI", 9, "bold"), padx=12, pady=6)
         self.header_status.pack(side="right", padx=14, pady=11)
@@ -144,7 +147,7 @@ class App:
         self.root, self.q, self.thread = root, queue.Queue(), None
         self.local_timezone = "Asia/Dhaka"  # GUI and Railway always use Bangladesh time.
         self.configure_theme(root); root.title(f"{APP_CONFIG.bot_app_name} Control Center"); root.geometry("1240x820"); root.minsize(1080, 700); self.build_header(root)
-        self.store = EncryptedFirestore(); self.settings = self.store.get_settings(); self.guilds, self.info, self.runtime, self.tickets, self.invite_url = [], {}, None, {}, ""
+        self.store = CloudflareD1Store(); self.settings = self.store.get_settings(); self.guilds, self.info, self.runtime, self.tickets, self.invite_url = [], {}, None, {}, ""
         self.scroll_regions = {}; self.settings_sync_inflight = False
         tabs = ttk.Notebook(root); tabs.pack(fill="both", expand=True, padx=14, pady=14); self.tabs = tabs
         self.connection_page, self.connection = self.make_scrollable_tab(tabs)
@@ -161,12 +164,14 @@ class App:
         self.movie_page, self.movie_tab = self.make_scrollable_tab(tabs)
         self.default_roles_page, self.default_roles_tab = self.make_scrollable_tab(tabs)
         self.moderation_page, self.moderation_tab = self.make_scrollable_tab(tabs)
+        self.activity_page, self.activity_tab = self.make_scrollable_tab(tabs)
+        self.word_block_page, self.word_block_tab = self.make_scrollable_tab(tabs)
         self.log_page, self.log_tab = self.make_scrollable_tab(tabs)
-        tabs.add(self.connection_page, text="Overview"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.log_page, text="Live Logs")
+        tabs.add(self.connection_page, text="Overview"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.activity_page, text="User Monitoring"); tabs.add(self.word_block_page, text="Word Block"); tabs.add(self.log_page, text="Live Logs")
         self.notif_entries, self.notif_edit_index = {}, None
-        self.connection_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui()
+        self.connection_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui(); self.activity_ui(); self.word_block_ui()
         log_actions = tk.Frame(self.log_tab); log_actions.pack(pady=(8, 0))
-        tk.Button(log_actions,text="Load shared Firebase logs",command=self.load_logs).pack(side="left", padx=5)
+        tk.Button(log_actions,text="Load shared Cloudflare R2 logs",command=self.load_logs).pack(side="left", padx=5)
         tk.Button(log_actions, text="Clear logs older than 30 days", command=self.clear_logs_older_than_30_days).pack(side="left", padx=5)
         self.logs = scrolledtext.ScrolledText(self.log_tab, state="disabled", height=30); self.logs.pack(fill="both", expand=True, padx=10, pady=10)
         root.bind_all("<MouseWheel>", self.scroll_tab, add="+"); root.bind_all("<Button-4>", lambda event: self.scroll_tab(event, -1), add="+"); root.bind_all("<Button-5>", lambda event: self.scroll_tab(event, 1), add="+"); root.bind_all("<<ComboboxSelected>>", self.animate_selection, add="+"); root.after(0, self.lock_combobox_wheel)
@@ -177,11 +182,11 @@ class App:
             root.after(500, self.connect)
 
     def connection_ui(self):
-        f = self.connection; tk.Label(f, text="Discord token (encrypted before Firebase save)").pack(pady=(25,4))
+        f = self.connection; tk.Label(f, text="Discord token (encrypted before Cloudflare R2 save)").pack(pady=(25,4))
         self.token = tk.Entry(f, width=70, show="*"); self.token.pack(); self.token.insert(0, self.settings.get("token", ""))
         self.auto = tk.BooleanVar(value=self.settings.get("auto_connect", True)); tk.Checkbutton(f, text="Auto-connect this GUI", variable=self.auto).pack(pady=8)
         row = tk.Frame(f); row.pack(pady=8)
-        tk.Button(row,text="Save to Firebase",command=self.save_connection,width=20).grid(row=0,column=0,padx=5)
+        tk.Button(row,text="Save to Cloudflare R2",command=self.save_connection,width=20).grid(row=0,column=0,padx=5)
         tk.Button(row,text="Connect GUI bot",command=self.connect,width=20).grid(row=0,column=1,padx=5)
         self.status=tk.Label(f,text="Status: Disconnected"); self.status.pack(pady=10)
         tk.Label(f,text="Bot invite link (available after connection)").pack(pady=(10,2))
@@ -196,7 +201,7 @@ class App:
         self.chat_roles=tk.Listbox(f,selectmode="multiple",width=65,height=16,exportselection=False); self.chat_roles.pack(); self.chat_roles.bind("<<ListboxSelect>>", lambda event: self.update_role_summary(self.chat_roles, self.chat_role_summary))
         self.chat_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.chat_role_summary.pack(pady=(6,0))
         tk.Label(f,text="This permission controls /chat only; it never filters or deletes normal messages.",fg=self.MUTED).pack(pady=(12,2))
-        tk.Button(f,text="Save chat permissions to Firebase",command=self.save_chat_roles,width=34).pack(pady=15)
+        tk.Button(f,text="Save chat permissions to Cloudflare R2",command=self.save_chat_roles,width=34).pack(pady=15)
 
     def link_permissions_ui(self):
         f=self.link_permissions; tk.Label(f,text="Server").pack(pady=(18,3))
@@ -205,7 +210,7 @@ class App:
         self.link_roles=tk.Listbox(f,selectmode="multiple",width=65,height=16,exportselection=False); self.link_roles.pack(); self.link_roles.bind("<<ListboxSelect>>", lambda event: self.update_role_summary(self.link_roles, self.link_role_summary))
         self.link_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.link_role_summary.pack(pady=(6,0))
         tk.Label(f,text="Only these roles can post URLs. The bot removes links from other roles.",fg=self.MUTED).pack(pady=(12,2))
-        tk.Button(f,text="Save link permissions to Firebase",command=self.save_link_roles,width=34).pack(pady=15)
+        tk.Button(f,text="Save link permissions to Cloudflare R2",command=self.save_link_roles,width=34).pack(pady=15)
     def drag_permissions_ui(self):
         f=self.drag_permissions; tk.Label(f,text="Server").pack(pady=(18,3))
         self.drag_server=ttk.Combobox(f,state="readonly",width=55); self.drag_server.pack(); self.drag_server.bind("<<ComboboxSelected>>",lambda e:self.show_drag_roles())
@@ -213,7 +218,7 @@ class App:
         self.drag_roles=tk.Listbox(f,selectmode="multiple",width=65,height=16,exportselection=False); self.drag_roles.pack(); self.drag_roles.bind("<<ListboxSelect>>", lambda event: self.update_role_summary(self.drag_roles, self.drag_role_summary))
         self.drag_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.drag_role_summary.pack(pady=(6,0))
         tk.Label(f,text="Only selected roles can run /move. The bot also needs Discord's Move Members permission.",fg=self.MUTED).pack(pady=(12,2))
-        tk.Button(f,text="Save drag permissions to Firebase",command=self.save_drag_roles,width=34).pack(pady=15)
+        tk.Button(f,text="Save drag permissions to Cloudflare R2",command=self.save_drag_roles,width=34).pack(pady=15)
     def tickets_ui(self):
         f=self.tickets_tab; top=tk.Frame(f); top.pack(fill="x",pady=10)
         tk.Button(top,text="Refresh encrypted tickets",command=self.load_tickets).pack(side="left",padx=10)
@@ -249,7 +254,7 @@ class App:
         actions=tk.Frame(f); actions.pack(pady=10)
         tk.Button(actions,text="Mark selected ticket resolved + DM user",command=self.resolve_ticket,width=38).grid(row=0,column=0,padx=6)
         tk.Button(actions,text="Close selected ticket + DM user",command=self.close_ticket,width=32).grid(row=0,column=1,padx=6)
-        tk.Button(actions,text="Delete selected ticket from Firebase",command=self.delete_ticket,width=34).grid(row=0,column=2,padx=6)
+        tk.Button(actions,text="Delete selected ticket from Cloudflare R2",command=self.delete_ticket,width=34).grid(row=0,column=2,padx=6)
 
     def moderation_ui(self):
         f=self.moderation_tab
@@ -261,6 +266,36 @@ class App:
         tk.Button(row,text="Kick member",command=lambda:self.moderate("kick"),width=20).grid(row=0,column=0,padx=8)
         tk.Button(row,text="Ban member",command=lambda:self.moderate("ban"),width=20).grid(row=0,column=1,padx=8)
 
+    def activity_ui(self):
+        f=self.activity_tab
+        tk.Label(f,text="User Monitoring (24 hours)",font=("TkDefaultFont",12,"bold")).pack(pady=(18,5))
+        tk.Label(f,text="Save a member ID, then click that saved target to view their last 24 hours of server messages, deleted messages, voice joins/leaves and duration. Spam and automatic-ban records are red. Discord does not provide voice-call audio or DM content.",wraplength=760,justify="center").pack(pady=(0,12))
+        form=tk.Frame(f); form.pack()
+        tk.Label(form,text="Server:").grid(row=0,column=0,padx=6,pady=6,sticky="e")
+        self.activity_guild=ttk.Combobox(form,state="readonly",width=52); self.activity_guild.grid(row=0,column=1,padx=6,pady=6)
+        self.activity_guild.bind("<<ComboboxSelected>>",lambda event:self.refresh_monitored_users())
+        tk.Label(form,text="Member ID:").grid(row=1,column=0,padx=6,pady=6,sticky="e")
+        self.activity_member_id=tk.Entry(form,width=54); self.activity_member_id.grid(row=1,column=1,padx=6,pady=6)
+        self.activity_member_name=tk.Label(f,text="Enter an ID to show the member name.",fg=self.MUTED); self.activity_member_name.pack(pady=(3,6))
+        row=tk.Frame(f); row.pack(pady=(3,8))
+        tk.Button(row,text="Save monitoring target",command=self.save_monitored_user,width=22).grid(row=0,column=0,padx=5)
+        tk.Button(row,text="Remove target",command=self.remove_monitored_user,width=18).grid(row=0,column=1,padx=5)
+        tk.Button(row,text="Load selected activity",command=self.load_member_activity,width=22).grid(row=0,column=2,padx=5)
+        self.monitored_users=tk.Listbox(f,height=5,exportselection=False,width=78); self.monitored_users.pack(padx=12,pady=(0,6),fill="x")
+        self.monitored_users.bind("<<ListboxSelect>>",lambda event:self.select_monitored_user())
+        self.activity_log=scrolledtext.ScrolledText(f,state="disabled",height=22); self.activity_log.tag_config("spam",foreground="#e53935"); self.activity_log.pack(fill="both",expand=True,padx=12,pady=(4,12))
+
+    def word_block_ui(self):
+        f=self.word_block_tab
+        tk.Label(f,text="Word Block • 5 strikes = permanent ban",font=("TkDefaultFont",12,"bold")).pack(pady=(18,5))
+        tk.Label(f,text="One word or phrase per line. A matched server message is deleted and logged; the fifth blocked message permanently bans that member. This shared Cloudflare R2 list is used by Railway and GUI.",wraplength=760,justify="center").pack(pady=(0,12))
+        form=tk.Frame(f); form.pack()
+        tk.Label(form,text="Server:").grid(row=0,column=0,padx=6,pady=6,sticky="e")
+        self.word_block_server=ttk.Combobox(form,state="readonly",width=52); self.word_block_server.grid(row=0,column=1,padx=6,pady=6)
+        self.word_block_server.bind("<<ComboboxSelected>>",lambda event:self.refresh_word_blocks())
+        self.word_block_text=scrolledtext.ScrolledText(f,width=70,height=16); self.word_block_text.pack(fill="both",expand=True,padx=30,pady=8)
+        tk.Button(f,text="Save word block list to Cloudflare R2",command=self.save_word_blocks,width=34).pack(pady=(4,14))
+
     def voice_ui(self):
         f=self.voice_tab
         tk.Label(f,text="Temporary Voice Lobby",font=("TkDefaultFont", 12, "bold")).pack(pady=(28,8))
@@ -271,13 +306,13 @@ class App:
         self.voice_server.bind("<<ComboboxSelected>>",lambda event:self.refresh_voice_channels())
         tk.Label(form,text="Join-to-create channel:").grid(row=1,column=0,padx=6,pady=8,sticky="e")
         self.voice_channel=ttk.Combobox(form,state="readonly",width=45); self.voice_channel.grid(row=1,column=1,padx=6,pady=8)
-        tk.Button(f,text="Save temporary voice lobby to Firebase",command=self.save_voice_lobby,width=38).pack(pady=18)
+        tk.Button(f,text="Save temporary voice lobby to Cloudflare R2",command=self.save_voice_lobby,width=38).pack(pady=18)
         tk.Label(f,text="The bot invite requests Administrator permission so it can create, manage, and move members between voice channels.",wraplength=650,justify="center").pack(pady=8)
 
     def greetings_ui(self):
         f=self.greetings_tab; self.welcome_image_path, self.goodbye_image_path = None, None
         tk.Label(f,text="Welcome & Goodbye",font=("TkDefaultFont", 12, "bold")).pack(pady=(16,5))
-        tk.Label(f,text="The bot sends: Welcome/Goodbye + @username + your custom message, with the image you upload.",wraplength=700,justify="center").pack(pady=(0,12))
+        tk.Label(f,text="The bot sends: Welcome/Goodbye + @username + your custom message, with the image you upload. Animated GIF target: 1920x1080, infinite loop.",wraplength=700,justify="center").pack(pady=(0,12))
         form=tk.Frame(f); form.pack(fill="x",padx=25)
         tk.Label(form,text="Server:").grid(row=0,column=0,padx=5,pady=6,sticky="e")
         self.greeting_server=ttk.Combobox(form,state="readonly",width=48); self.greeting_server.grid(row=0,column=1,columnspan=2,padx=5,pady=6,sticky="w")
@@ -298,7 +333,7 @@ class App:
         tk.Button(form2,text="Upload goodbye image",command=lambda:self.choose_greeting_image("goodbye")).grid(row=2,column=0,padx=5,pady=6)
         self.goodbye_image_label=tk.Label(form2,text="No new image selected (saved image is kept)",anchor="w"); self.goodbye_image_label.grid(row=2,column=1,columnspan=2,padx=5,pady=6,sticky="w")
         self.goodbye_preview=tk.Label(form2,text="No goodbye image saved",anchor="w"); self.goodbye_preview.grid(row=3,column=1,columnspan=2,padx=5,pady=(0,6),sticky="w")
-        tk.Button(f,text="Save welcome / goodbye to Firebase",command=self.save_greetings,width=38).pack(pady=18)
+        tk.Button(f,text="Save welcome / goodbye to Cloudflare R2",command=self.save_greetings,width=38).pack(pady=18)
 
     def counting_ui(self):
         f=self.counting_tab
@@ -312,7 +347,7 @@ class App:
         self.counting_channel=ttk.Combobox(form,state="readonly",width=48); self.counting_channel.grid(row=1,column=1,padx=6,pady=7)
         tk.Button(f,text="Save Counting Channel",command=self.save_counting_channel,width=32).pack(pady=(10,5))
         tk.Button(f,text="Reset Count + Clear Channel",command=self.reset_counting_channel,width=32).pack(pady=(2,5))
-        tk.Label(f,text="The count is stored atomically in Firebase, so GUI and Railway process every Discord message only once.",fg=self.MUTED,wraplength=720,justify="center").pack(pady=8)
+        tk.Label(f,text="The count is stored atomically in Cloudflare R2, so GUI and Railway process every Discord message only once.",fg=self.MUTED,wraplength=720,justify="center").pack(pady=8)
     def birthday_ui(self):
         f=self.birthday_tab; self.birthday_image_path=None
         tk.Label(f,text="Birthdays",font=("TkDefaultFont", 12, "bold")).pack(pady=(16,5))
@@ -330,12 +365,12 @@ class App:
         tk.Button(form,text="Upload birthday image",command=self.choose_birthday_image).grid(row=3,column=0,padx=5,pady=6)
         self.birthday_image_label=tk.Label(form,text="No new image selected (saved image is kept)",anchor="w"); self.birthday_image_label.grid(row=3,column=1,columnspan=2,padx=5,pady=6,sticky="w")
         self.birthday_preview=tk.Label(form,text="No birthday image saved",anchor="w"); self.birthday_preview.grid(row=4,column=1,columnspan=2,padx=5,pady=(0,6),sticky="w")
-        tk.Button(f,text="Save birthday settings to Firebase",command=self.save_birthday_channel,width=38).pack(pady=18)
+        tk.Button(f,text="Save birthday settings to Cloudflare R2",command=self.save_birthday_channel,width=38).pack(pady=18)
 
     def leveling_ui(self):
         f=self.leveling_tab
         tk.Label(f,text="Activity Leveling",font=("TkDefaultFont",12,"bold")).pack(pady=(20,6))
-        tk.Label(f,text="Users earn XP for meaningful messages. XP is protected by a cooldown and saved atomically in Firebase, so the GUI and Railway worker stay in sync.",wraplength=700,justify="center").pack(pady=(0,14))
+        tk.Label(f,text="Users earn XP for meaningful messages. XP is protected by a cooldown and saved atomically in Cloudflare R2, so the GUI and Railway worker stay in sync.",wraplength=700,justify="center").pack(pady=(0,14))
         form=tk.Frame(f); form.pack()
         tk.Label(form,text="Server:").grid(row=0,column=0,padx=6,pady=7,sticky="e")
         self.level_server=ttk.Combobox(form,state="readonly",width=45); self.level_server.grid(row=0,column=1,columnspan=3,padx=6,pady=7)
@@ -356,7 +391,7 @@ class App:
         tk.Button(f,text="Save Leveling Settings",command=self.save_leveling,width=32).pack(pady=(8,4))
         tk.Label(f,text="Formula: each level costs base × current-level^multiplier. A small message-length bonus (up to +10 XP) rewards real conversation; messages below 3 characters and cooldown spam earn nothing.",wraplength=700,justify="center").pack(pady=14)
         tk.Label(f,text="Voice Call XP",font=("TkDefaultFont",12,"bold")).pack(pady=(4,6))
-        tk.Label(f,text="Members on a voice call earn XP on their own timer — chatting and calling both add to the same level and never block each other.",wraplength=700,justify="center").pack(pady=(0,10))
+        tk.Label(f,text="Members on a voice call earn XP on their own timer. Voice awards are intentionally 3× slower than this interval, so simply idling in VC cannot level up quickly.",wraplength=700,justify="center").pack(pady=(0,10))
         voice_form=tk.Frame(f); voice_form.pack()
         tk.Label(voice_form,text="XP per interval:").grid(row=0,column=0,padx=6,pady=7,sticky="e")
         self.voice_level_xp=tk.Spinbox(voice_form,from_=1,to=100,width=8); self.voice_level_xp.grid(row=0,column=1,sticky="w",padx=6)
@@ -368,7 +403,7 @@ class App:
         tk.Checkbutton(f,text="Require another member in the call (blocks solo/AFK farming)",variable=self.voice_level_require_others).pack(pady=(4,2))
         self.voice_level_ignore_deafened=tk.BooleanVar(value=True)
         tk.Checkbutton(f,text="Skip self-deafened members (they aren't actually listening)",variable=self.voice_level_ignore_deafened).pack(pady=(0,10))
-        tk.Button(f,text="Save leveling to Firebase",command=self.save_leveling,width=32).pack(pady=6)
+        tk.Button(f,text="Save leveling to Cloudflare R2",command=self.save_leveling,width=32).pack(pady=6)
 
     def movie_ui(self):
         f = self.movie_tab; self.movie_image_path = None
@@ -400,7 +435,7 @@ class App:
         self.movie_message = scrolledtext.ScrolledText(form, width=45, height=5); self.movie_message.grid(row=6, column=1, columnspan=3, padx=5, pady=6, sticky="w")
         tk.Button(form, text="Upload movie poster", command=self.choose_movie_image).grid(row=7, column=0, padx=5, pady=6)
         self.movie_image_label = tk.Label(form, text="No new poster selected (saved poster is kept)", anchor="w"); self.movie_image_label.grid(row=7, column=1, columnspan=3, padx=5, pady=6, sticky="w")
-        tk.Button(f, text="Save movie announcement to Firebase", command=self.save_movie_announcement, width=38).pack(pady=16)
+        tk.Button(f, text="Save movie announcement to Cloudflare R2", command=self.save_movie_announcement, width=38).pack(pady=16)
 
     def refresh_movie_ui(self):
         i = self.movie_server.current()
@@ -421,8 +456,8 @@ class App:
         self.movie_message.delete("1.0", tk.END); self.movie_message.insert("1.0", config.get("message", ""))
 
     def choose_movie_image(self):
-        path = filedialog.askopenfilename(title="Choose movie poster", filetypes=[("Image files", "*.png *.jpg *.jpeg *.webp"), ("All files", "*.*")])
-        if path:
+        path = filedialog.askopenfilename(title="Choose movie poster", filetypes=[("Image files", "*.png *.jpg *.jpeg *.webp *.gif"), ("All files", "*.*")])
+        if path and self.validate_image_upload(path):
             self.movie_image_path = path; self.movie_image_label.config(text=f"Selected: {path}")
 
     def save_movie_announcement(self):
@@ -438,12 +473,12 @@ class App:
         if self.movie_image_path:
             content_type, data = self.prepare_greeting_image(self.movie_image_path); config["image_id"] = f"{guild_id}_movie_{config['id']}"; self.store.save_notification_image(config["image_id"], content_type, data)
         self.settings.setdefault("movie_announcements", {})[guild_id] = config; self.settings = self.store.save_settings(self.settings); self.movie_image_path = None
-        self.movie_image_label.config(text="Saved to Firebase")
+        self.movie_image_label.config(text="Saved to Cloudflare R2")
         messagebox.showinfo("Saved", "Movie announcement saved. Railway synchronizes within 10 seconds.")
     def notifications_ui(self):
         f = self.notifications_tab; self.notif_image_path = None
         tk.Label(f, text="Role Notifications", font=("TkDefaultFont", 12, "bold")).pack(pady=(14, 4))
-        tk.Label(f, text="Pick a channel, role(s), local time, and an optional image. Leave Custom message empty to send only the role mention; add text when you want a full announcement. GUI and Railway use the same Firebase schedule, so each notification is sent exactly once.", wraplength=740, justify="center").pack(pady=(0, 10))
+        tk.Label(f, text="Pick a channel, role(s), local time, and an optional image. Leave Custom message empty to send only the role mention; add text when you want a full announcement. GUI and Railway use the same Cloudflare R2 schedule, so each notification is sent exactly once.", wraplength=740, justify="center").pack(pady=(0, 10))
 
         top = tk.Frame(f); top.pack(fill="x", padx=20)
         tk.Label(top, text="Server:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
@@ -503,7 +538,7 @@ class App:
         for widget, value in ((self.notif_hour, 8), (self.notif_minute, 0)):
             widget.delete(0, tk.END); widget.insert(0, str(value))
 
-        tk.Button(f, text="Save all role notifications to Firebase", command=self.save_role_notifications, width=38).pack(pady=14)
+        tk.Button(f, text="Save all role notifications to Cloudflare R2", command=self.save_role_notifications, width=38).pack(pady=14)
         self.refresh_notif_schedule_state()
 
     def refresh_notif_schedule_state(self):
@@ -637,8 +672,8 @@ class App:
             self.show_notif_preview(text=f"Could not load saved image: {exc}")
 
     def choose_notif_image(self):
-        path = filedialog.askopenfilename(title="Choose notification image", filetypes=[("Image files", "*.png *.jpg *.jpeg *.webp"), ("All files", "*.*")])
-        if not path: return
+        path = filedialog.askopenfilename(title="Choose notification image", filetypes=[("Image files", "*.png *.jpg *.jpeg *.webp *.gif"), ("All files", "*.*")])
+        if not path or not self.validate_image_upload(path): return
         try:
             with open(path, "rb") as image_file: self.show_notif_preview(image_file.read())
             self.notif_image_path = path; self.notif_image_label.config(text=f"Selected: {path}")
@@ -744,7 +779,7 @@ class App:
         self.default_role_list = tk.Listbox(f, selectmode="multiple", width=50, height=12, exportselection=False)
         self.default_role_list.pack(pady=(0, 6)); self.default_role_list.bind("<<ListboxSelect>>", lambda event: self.update_role_summary(self.default_role_list, self.default_role_summary))
         self.default_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.default_role_summary.pack(pady=(0,10))
-        tk.Button(f, text="Save default role(s) to Firebase", command=self.save_default_roles, width=32).pack(pady=(0, 10))
+        tk.Button(f, text="Save default role(s) to Cloudflare R2", command=self.save_default_roles, width=32).pack(pady=(0, 10))
         one_member = tk.Frame(f); one_member.pack(pady=(0, 10))
         tk.Label(one_member, text="Apply saved Auto Role to member ID:").grid(row=0, column=0, padx=5, pady=5)
         self.default_role_member_id = tk.Entry(one_member, width=24); self.default_role_member_id.grid(row=0, column=1, padx=5, pady=5)
@@ -843,8 +878,8 @@ class App:
     def clear_logs_older_than_30_days(self):
         """Apply the shared 30-day log retention rule without freezing the GUI."""
         confirmed = messagebox.askyesno(
-            "Clear old Firebase logs",
-            "Permanently delete all shared Firebase logs older than 30 days?\n\nThis cannot be undone.",
+            "Clear old Cloudflare R2 logs",
+            "Permanently delete all shared Cloudflare R2 logs older than 30 days?\n\nThis cannot be undone.",
         )
         if not confirmed:
             return
@@ -1044,7 +1079,7 @@ class App:
             "voice_xp_ignore_deafened":self.voice_level_ignore_deafened.get(),
         }
         self.settings=self.store.save_settings(self.settings)
-        messagebox.showinfo("Saved","Leveling settings (text + voice XP) are encrypted in Firebase. Railway synchronizes within 10 seconds.")
+        messagebox.showinfo("Saved","Leveling settings (text + voice XP) are encrypted in Cloudflare R2. Railway synchronizes within 10 seconds.")
 
     def refresh_greeting_channels(self):
         i=self.greeting_server.current()
@@ -1080,28 +1115,92 @@ class App:
         try:
             image=self.store.get_welcome_goodbye_image(image_id)
             if not image:return self.show_greeting_preview(kind,text="Saved image is no longer available")
-            self.show_greeting_preview(kind,image[1]); getattr(self,f"{kind}_image_label").config(text="Saved image loaded from Firebase")
+            self.show_greeting_preview(kind,image[1]); getattr(self,f"{kind}_image_label").config(text="Saved image loaded from Cloudflare R2")
         except Exception as exc:
             self.show_greeting_preview(kind,text=f"Could not load saved image: {exc}")
 
     def choose_greeting_image(self, kind):
-        path=filedialog.askopenfilename(title=f"Choose {kind} image",filetypes=[("Image files","*.png *.jpg *.jpeg *.webp"), ("All files","*.*")])
-        if not path:return
+        path=filedialog.askopenfilename(title=f"Choose {kind} image",filetypes=[("Image files","*.png *.jpg *.jpeg *.webp *.gif"), ("All files","*.*")])
+        if not path or not self.validate_image_upload(path):return
         try:
             with open(path,"rb") as image_file: self.show_greeting_preview(kind,image_file.read())
             if kind=="welcome": self.welcome_image_path=path; self.welcome_image_label.config(text=f"Selected: {path}")
             else: self.goodbye_image_path=path; self.goodbye_image_label.config(text=f"Selected: {path}")
         except Exception as exc: messagebox.showerror("Image error",f"Could not open this image: {exc}")
 
-    def prepare_greeting_image(self, path):
-        with Image.open(path) as image:
-            image.thumbnail((1200,675))
-            if image.mode in ("RGBA","LA"):
-                background=Image.new("RGB",image.size,"white"); background.paste(image,mask=image.getchannel("A")); image=background
-            else: image=image.convert("RGB")
-            output=io.BytesIO(); image.save(output,format="JPEG",quality=85,optimize=True)
-        return "image/jpeg",output.getvalue()
+    def validate_image_upload(self, path):
+        # Animated GIFs are uploaded byte-for-byte to R2 without a size limit.
+        if path.lower().endswith(".gif"):
+            return True
+        if os.path.getsize(path) > MAX_IMAGE_UPLOAD_BYTES:
+            messagebox.showwarning("Image too large", "Choose an image that is 10 MB or smaller.")
+            return False
+        return True
 
+    def prepare_greeting_image(self, path):
+        # GIFs are uploaded byte-for-byte: no size cap, frame reduction, or optimization.
+        if path.lower().endswith(".gif"):
+            with Image.open(path) as source:
+                if (source.format or "").upper() != "GIF":
+                    raise ValueError("This file is not a valid GIF.")
+            with open(path, "rb") as image_file:
+                return "image/gif", image_file.read()
+        if os.path.getsize(path) > MAX_IMAGE_UPLOAD_BYTES:
+            raise ValueError("Image must be 10 MB or smaller.")
+        with Image.open(path) as source:
+            # Preserve every GIF frame and force the Discord attachment to loop.
+            # Previously this selected only frame 0 and saved a static JPEG.
+            if (source.format or "").upper() == "GIF":
+                durations, original_frames = [], []
+                for frame in ImageSequence.Iterator(source):
+                    durations.append(max(20, int(frame.info.get("duration", 100))))
+                    original_frames.append(frame.convert("RGBA"))
+                if not original_frames:
+                    raise ValueError("The GIF has no animation frames.")
+                # Very long GIFs cannot fit Cloudflare R2 even after resizing. Keep
+                # the animation smooth while limiting the exported frame count.
+                if len(original_frames) > 120:
+                    compact_frames, compact_durations = [], []
+                    step = len(original_frames) / 120
+                    for index in range(120):
+                        start = int(index * step)
+                        end = max(start + 1, int((index + 1) * step))
+                        compact_frames.append(original_frames[start])
+                        compact_durations.append(sum(durations[start:end]))
+                    original_frames, durations = compact_frames, compact_durations
+                for maximum, colors in ((1920, 128), (1600, 96), (1280, 64), (1024, 48), (960, 32), (768, 24), (640, 16), (512, 12), (384, 8), (320, 8), (256, 8), (192, 6), (128, 4), (96, 4), (64, 2)):
+                    frames = []
+                    for frame in original_frames:
+                        image = frame.copy()
+                        image.thumbnail((min(maximum, 1920), min(maximum, 1080)), Image.Resampling.LANCZOS)
+                        frames.append(image.convert("P", palette=Image.Palette.ADAPTIVE, colors=colors))
+                    output = io.BytesIO()
+                    frames[0].save(
+                        output, format="GIF", save_all=True, append_images=frames[1:],
+                        duration=durations, loop=0, disposal=2, optimize=True,
+                    )
+                    if output.tell() <= MAX_STORED_IMAGE_BYTES:
+                        return "image/gif", output.getvalue()
+                raise ValueError("This GIF is unusually long or complex. Please use a shorter GIF with fewer frames.")
+
+            # Static images are stored compactly so encrypted Cloudflare R2 documents
+            # remain below Cloudflare R2's approximately 1 MiB document limit.
+            image = source.convert("RGBA") if source.mode in ("RGBA", "LA", "P") else source.convert("RGB")
+            if image.mode == "RGBA":
+                background = Image.new("RGB", image.size, "white"); background.paste(image, mask=image.getchannel("A")); image = background
+            else:
+                image = image.convert("RGB")
+            image.thumbnail((1200, 675))
+            for quality in (85, 75, 65, 55, 45, 35):
+                output = io.BytesIO(); image.save(output, format="JPEG", quality=quality, optimize=True)
+                if output.tell() <= MAX_STORED_IMAGE_BYTES:
+                    return "image/jpeg", output.getvalue()
+            while image.width > 320 and image.height > 180:
+                image.thumbnail((max(320, int(image.width * .8)), max(180, int(image.height * .8))))
+                output = io.BytesIO(); image.save(output, format="JPEG", quality=35, optimize=True)
+                if output.tell() <= MAX_STORED_IMAGE_BYTES:
+                    return "image/jpeg", output.getvalue()
+        raise ValueError("This image could not be compressed for free Cloudflare R2 storage. Try a simpler image.")
     def save_greetings(self):
         server_index,welcome_index,goodbye_index=self.greeting_server.current(),self.welcome_channel.current(),self.goodbye_channel.current()
         if server_index<0 or welcome_index<0 or goodbye_index<0:
@@ -1117,10 +1216,12 @@ class App:
                     content_type,data=self.prepare_greeting_image(path)
                     image_id=f"{guild_id}_{kind}"
                     self.store.save_welcome_goodbye_image(image_id,content_type,data); config[f"{kind}_image_id"]=image_id
-            self.settings.setdefault("welcome_goodbye",{})[guild_id]=config; self.settings=self.store.save_settings(self.settings)
+            self.settings=self.store.save_welcome_goodbye_config(guild_id, config)
+            if self.runtime:
+                self.runtime.settings = self.settings
             self.welcome_image_path=self.goodbye_image_path=None
-            self.welcome_image_label.config(text="Saved to Firebase"); self.goodbye_image_label.config(text="Saved to Firebase")
-            messagebox.showinfo("Saved","Welcome and goodbye settings/images are encrypted in Firebase. Railway synchronizes within 10 seconds.")
+            self.welcome_image_label.config(text="Saved to Cloudflare R2"); self.goodbye_image_label.config(text="Saved to Cloudflare R2")
+            messagebox.showinfo("Saved","Welcome and goodbye settings/images are encrypted in Cloudflare R2. Railway synchronizes within 10 seconds.")
         except Exception as exc: messagebox.showerror("Greeting save error",str(exc))
 
     def refresh_counting_channels(self):
@@ -1188,13 +1289,13 @@ class App:
         try:
             image=self.store.get_birthday_image(image_id)
             if not image: return self.show_birthday_preview(text="Saved image is no longer available")
-            self.show_birthday_preview(image[1]); self.birthday_image_label.config(text="Saved image loaded from Firebase")
+            self.show_birthday_preview(image[1]); self.birthday_image_label.config(text="Saved image loaded from Cloudflare R2")
         except Exception as exc:
             self.show_birthday_preview(text=f"Could not load saved image: {exc}")
 
     def choose_birthday_image(self):
-        path=filedialog.askopenfilename(title="Choose birthday image",filetypes=[("Image files","*.png *.jpg *.jpeg *.webp"), ("All files","*.*")])
-        if not path:return
+        path=filedialog.askopenfilename(title="Choose birthday image",filetypes=[("Image files","*.png *.jpg *.jpeg *.webp *.gif"), ("All files","*.*")])
+        if not path or not self.validate_image_upload(path):return
         try:
             with open(path,"rb") as image_file: self.show_birthday_preview(image_file.read())
             self.birthday_image_path=path; self.birthday_image_label.config(text=f"Selected: {path}")
@@ -1213,8 +1314,8 @@ class App:
                 image_id=f"{guild_id}_birthday"
                 self.store.save_birthday_image(image_id,content_type,data); config["image_id"]=image_id
             self.settings.setdefault("birthdays",{})[guild_id]=config; self.settings=self.store.save_settings(self.settings)
-            self.birthday_image_path=None; self.birthday_image_label.config(text="Saved to Firebase")
-            messagebox.showinfo("Saved","Birthday settings/image are encrypted in Firebase. Railway synchronizes within 10 seconds.")
+            self.birthday_image_path=None; self.birthday_image_label.config(text="Saved to Cloudflare R2")
+            messagebox.showinfo("Saved","Birthday settings/image are encrypted in Cloudflare R2. Railway synchronizes within 10 seconds.")
         except Exception as exc: messagebox.showerror("Birthday save error",str(exc))
 
     def load_tickets(self):
@@ -1288,13 +1389,115 @@ class App:
         if not selected: return messagebox.showwarning("Ticket missing","Select a ticket first.")
         ticket=self.tickets.get(selected[0])
         if not ticket:return messagebox.showwarning("Ticket missing","The selected ticket is no longer available.")
-        confirmed=messagebox.askyesno("Delete ticket permanently",f"Delete ticket #{ticket['ticket_id']} permanently from Firebase?\n\nThis cannot be undone.")
+        confirmed=messagebox.askyesno("Delete ticket permanently",f"Delete ticket #{ticket['ticket_id']} permanently from Cloudflare R2?\n\nThis cannot be undone.")
         if not confirmed:return
         try:
             self.store.delete_ticket(selected[0]); self.resolution.delete(0,tk.END); self.load_tickets()
-            self.log(f"Deleted ticket #{ticket['ticket_id']} permanently from Firebase.")
-            messagebox.showinfo("Deleted",f"Ticket #{ticket['ticket_id']} was deleted from Firebase.")
+            self.log(f"Deleted ticket #{ticket['ticket_id']} permanently from Cloudflare R2.")
+            messagebox.showinfo("Deleted",f"Ticket #{ticket['ticket_id']} was deleted from Cloudflare R2.")
         except Exception as exc: messagebox.showerror("Delete error",str(exc))
+
+    DEFAULT_WORD_BLOCKS = ["porn", "porno", "nude", "nudes", "onlyfans", "xxx", "sex video", "sexchat", "blowjob", "handjob", "dick pic", "pussy pic", "hentai", "nsfw", "camgirl", "escort", "free nitro", "nitro giveaway", "crypto giveaway", "click here"]
+
+    def refresh_monitored_users(self):
+        if not hasattr(self, "monitored_users") or self.activity_guild.current() < 0:
+            return
+        guild_id = str(self.guilds[self.activity_guild.current()][0])
+        users = self.settings.get("monitored_users", {}).get(guild_id, [])
+        self.monitored_users.delete(0, tk.END)
+        for user_id in users:
+            member = next((m for m in self.info.get(int(guild_id), {}).get("members", []) if m["id"] == str(user_id)), None)
+            label = f"{user_id} — {member['display_name']}" if member else str(user_id)
+            self.monitored_users.insert(tk.END, label)
+
+    def select_monitored_user(self):
+        selected = self.monitored_users.curselection()
+        if not selected:
+            return
+        user_id = self.monitored_users.get(selected[0]).split(" — ", 1)[0]
+        self.activity_member_id.delete(0, tk.END); self.activity_member_id.insert(0, user_id)
+        self.find_activity_member(); self.load_member_activity()
+
+    def save_monitored_user(self):
+        selected = self.activity_selection()
+        if not selected:
+            return
+        guild_id, user_id = selected
+        users = list(dict.fromkeys(map(str, self.settings.setdefault("monitored_users", {}).get(str(guild_id), []))))
+        if user_id not in users:
+            users.append(user_id)
+        self.settings["monitored_users"][str(guild_id)] = users
+        self.settings = self.store.save_settings(self.settings)
+        if self.runtime: self.runtime.settings = self.settings
+        self.refresh_monitored_users(); self.find_activity_member()
+        self.log(f"Saved {user_id} as a 24-hour monitoring target.")
+
+    def remove_monitored_user(self):
+        selected = self.activity_selection()
+        if not selected:
+            return
+        guild_id, user_id = selected
+        self.settings.setdefault("monitored_users", {})[str(guild_id)] = [value for value in self.settings.get("monitored_users", {}).get(str(guild_id), []) if str(value) != user_id]
+        self.settings = self.store.save_settings(self.settings)
+        if self.runtime: self.runtime.settings = self.settings
+        self.refresh_monitored_users()
+
+    def refresh_word_blocks(self):
+        if not hasattr(self, "word_block_text") or self.word_block_server.current() < 0:
+            return
+        guild_id = str(self.guilds[self.word_block_server.current()][0])
+        words = self.settings.get("word_blocks", {}).get(guild_id, self.DEFAULT_WORD_BLOCKS)
+        self.word_block_text.delete("1.0", tk.END); self.word_block_text.insert("1.0", "\n".join(words))
+
+    def save_word_blocks(self):
+        if self.word_block_server.current() < 0:
+            return messagebox.showwarning("Server missing", "Select a server first.")
+        words = list(dict.fromkeys(word.strip().casefold() for word in self.word_block_text.get("1.0", tk.END).replace(",", "\n").splitlines() if word.strip()))
+        if len(words) > 200:
+            return messagebox.showwarning("Too many words", "Save at most 200 words or phrases.")
+        guild_id = str(self.guilds[self.word_block_server.current()][0])
+        self.settings.setdefault("word_blocks", {})[guild_id] = words
+        self.settings = self.store.save_settings(self.settings)
+        if self.runtime: self.runtime.settings = self.settings
+        messagebox.showinfo("Saved", f"Saved {len(words)} blocked words. Railway synchronizes within 10 seconds.")
+
+    def activity_selection(self):
+        index=self.activity_guild.current()
+        user_id=self.activity_member_id.get().strip()
+        if index<0 or not user_id.isdigit():
+            messagebox.showwarning("Missing values","Select a server and enter a numeric member ID.")
+            return None
+        return self.guilds[index][0],user_id
+
+    def find_activity_member(self):
+        selected=self.activity_selection()
+        if not selected:return
+        guild_id,user_id=selected
+        member=next((m for m in self.info.get(guild_id,{}).get("members",[]) if m["id"]==user_id),None)
+        if not member:
+            return messagebox.showwarning("Member not found","This ID is not in the selected server, or member data is still loading.")
+        self.activity_member_name.config(text=f"Selected member: {member['display_name']} ({member['name']})",fg=self.SUCCESS)
+
+    def load_member_activity(self):
+        selected=self.activity_selection()
+        if not selected:return
+        guild_id,user_id=selected
+        self.find_activity_member()
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            records = [record for record in self.store.recent_member_activity(guild_id,user_id) if datetime.fromisoformat(record.get("at", "1970-01-01T00:00:00+00:00")) >= cutoff]
+            self.activity_log.config(state="normal"); self.activity_log.delete("1.0",tk.END)
+            if not records:self.activity_log.insert(tk.END,"No activity for this saved target in the last 24 hours.\n")
+            for record in records:
+                details=record.get("details",{}); event_type=record.get("event_type","activity")
+                if event_type in ("message", "message_deleted"): detail=f"#{details.get('channel','unknown')}: {details.get('content','')}"
+                elif event_type=="voice_left": detail=f"left {details.get('channel','unknown')} after {details.get('duration_seconds',0)} seconds"
+                elif event_type=="voice_joined": detail=f"joined {details.get('channel','unknown')}"
+                else: detail=str(details) if details else ""
+                tags=("spam",) if event_type.startswith("word_spam") else ()
+                self.activity_log.insert(tk.END,f"[{record.get('at','-')}] {event_type}: {detail}\n",tags)
+            self.activity_log.config(state="disabled")
+        except Exception as exc: messagebox.showerror("Activity error",str(exc))
 
     def moderate(self, action):
         i=self.mod_guild.current()
@@ -1308,10 +1511,10 @@ class App:
                 kind,data=self.q.get_nowait()
                 if kind=="log": self.logs.config(state="normal"); self.logs.insert(tk.END,data+"\n"); self.logs.see(tk.END); self.logs.config(state="disabled")
                 elif kind=="guilds":
-                    self.guilds=data; values=[f"{name} ({gid})" for gid,name in data]; self.chat_server["values"]=values; self.link_server["values"]=values; self.drag_server["values"]=values; self.mod_guild["values"]=values; self.ticket_server["values"]=values; self.voice_server["values"]=values; self.greeting_server["values"]=values; self.level_server["values"]=values; self.counting_server["values"]=values; self.birthday_server["values"]=values; self.notif_server["values"]=values; self.movie_server["values"]=values; self.default_role_server["values"]=values
-                    if data: self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0)
+                    self.guilds=data; values=[f"{name} ({gid})" for gid,name in data]; self.chat_server["values"]=values; self.link_server["values"]=values; self.drag_server["values"]=values; self.mod_guild["values"]=values; self.ticket_server["values"]=values; self.voice_server["values"]=values; self.greeting_server["values"]=values; self.level_server["values"]=values; self.counting_server["values"]=values; self.birthday_server["values"]=values; self.notif_server["values"]=values; self.movie_server["values"]=values; self.default_role_server["values"]=values; self.activity_guild["values"]=values; self.word_block_server["values"]=values
+                    if data: self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0); self.activity_guild.current(0)
                     self.set_status("Connected")
-                elif kind=="guild": self.info[data["id"]]=data; self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui()
+                elif kind=="guild": self.info[data["id"]]=data; self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_monitored_users(); self.refresh_word_blocks()
                 elif kind=="ticket_moderator_verified":
                     user_id = data["id"]
                     if user_id in self.ticket_moderator_ids:
@@ -1330,16 +1533,16 @@ class App:
                     self.settings_sync_inflight=False
                     if data.get("settings_revision",0)>self.settings.get("settings_revision",0):
                         self.settings=data
-                        # Keep every settings tab aligned with Firebase, not only
+                        # Keep every settings tab aligned with Cloudflare R2, not only
                         # permission and Auto Role tabs. This is the same shared
                         # document Railway reads on its 10-second refresh cycle.
-                        self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui()
-                        self.header_subtitle.config(text="Settings synchronized from Firebase",fg=self.SUCCESS)
+                        self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_monitored_users(); self.refresh_word_blocks()
+                        self.header_subtitle.config(text="Settings synchronized from Cloudflare R2",fg=self.SUCCESS)
                 elif kind=="settings_sync_error": self.settings_sync_inflight=False
                 elif kind=="logs_cleared":
-                    self.log(f"Deleted {data} Firebase log(s) older than 30 days.")
+                    self.log(f"Deleted {data} Cloudflare R2 log(s) older than 30 days.")
                     self.load_logs()
-                    messagebox.showinfo("Logs cleared", f"Deleted {data} Firebase log(s) older than 30 days.")
+                    messagebox.showinfo("Logs cleared", f"Deleted {data} Cloudflare R2 log(s) older than 30 days.")
                 elif kind=="logs_clear_error": messagebox.showerror("Log cleanup error", data)
                 elif kind=="refresh_tickets": self.load_tickets()
                 elif kind=="default_role_progress":
@@ -1350,3 +1553,4 @@ class App:
 
 if __name__=="__main__":
     root=tk.Tk(); App(root); root.mainloop()
+

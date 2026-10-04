@@ -1,8 +1,8 @@
-"""Headless Railway entry point. Uses the same ModeratorBot as gui_bot.py."""
+﻿"""Headless Railway entry point. Uses the same ModeratorBot as gui_bot.py."""
 import asyncio
 import os
 from dotenv import load_dotenv
-from firebase_store import EncryptedFirestore
+from d1_store import CloudflareD1Store
 from bot_core import ModeratorBot
 from app_config import APP_CONFIG
 
@@ -11,7 +11,7 @@ if APP_CONFIG.logo_path.is_file():
     print(f"{APP_CONFIG.bot_app_name}: logo asset found at {APP_CONFIG.logo_path.relative_to(APP_CONFIG.logo_path.parent.parent)}", flush=True)
 else:
     print(f"{APP_CONFIG.bot_app_name}: logo asset missing at {APP_CONFIG.logo_path}; Railway will run headlessly.", flush=True)
-store = EncryptedFirestore()
+store = CloudflareD1Store()
 
 def log(message):
     print(message, flush=True)
@@ -24,7 +24,8 @@ async def run_forever():
         try:
             token = os.getenv("DISCORD_BOT_TOKEN", "").strip() or store.get_settings()["token"]
             if not token:
-                raise RuntimeError("No Discord token in encrypted Firebase settings or DISCORD_BOT_TOKEN.")
+                raise RuntimeError("No Discord token in encrypted Cloudflare R2 settings or DISCORD_BOT_TOKEN.")
+            delay = 5  # A successful Discord connection resets reconnect backoff.
             await ModeratorBot(store, "railway", log).run(token)
             log("Discord connection ended; reconnecting.")
         except asyncio.CancelledError:
@@ -35,3 +36,4 @@ async def run_forever():
         delay = min(delay * 2, 60)
 
 asyncio.run(run_forever())
+

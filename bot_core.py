@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import io
 import re
 import re
@@ -12,6 +12,7 @@ from discord.ext import commands
 from app_config import APP_CONFIG
 
 LINK_PATTERN = re.compile(r"(https?://\S+|www\.\S+|discord\.gg/\S+|\S+\.(com|net|org|io|xyz|gg)\S*)", re.I)
+DISCORD_INVITE_PATTERN = re.compile(r"(?:https?://)?(?:www\.)?(?:discord\.gg|discord(?:app)?\.com/invite)/[A-Za-z0-9-]+", re.I)
 # Administrator is intentional: temporary voice rooms require channel management and moving members.
 INVITE_PERMISSIONS = discord.Permissions(administrator=True)
 # The configured admin is protected from every Kick/Ban action issued by this bot.
@@ -26,6 +27,19 @@ MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July",
                "August", "September", "October", "November", "December"]
 
 
+def image_extension(content_type, data=None):
+    """Return an attachment extension that matches the stored image MIME type."""
+    # Prefer the actual GIF signature for legacy records with a wrong MIME value.
+    if data and bytes(data[:6]) in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    return {
+        "image/gif": "gif",
+        "image/jpeg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+    }.get((content_type or "").lower(), "jpg")
+
+
 def format_birthday(record):
     """Render a saved {day, month, year} birthday record as e.g. 'March 25' or 'March 25, 2000'."""
     month_index = int(record.get("month", 0))
@@ -37,6 +51,11 @@ def format_birthday(record):
 DEFAULT_TICKET_CLOSE_NOTE = (
     "Sorry for the inconvenience. This ticket has been closed. If you still need help, "
     "please feel free to open a new ticket and our support team will be happy to assist you."
+)
+EXTERNAL_GUILD_OWNER_NOTICE = (
+    "Hello! This bot was designed exclusively for the MetaVerse Bangladesh Discord server.\n\n"
+    "It is not available for use in other servers. If you would like a custom Discord bot for your own server, "
+    "please contact <@1022113587851960431> (kakarotbd) to discuss a contract. This bot will now leave this server."
 )
 
 
@@ -63,7 +82,7 @@ class ChatSendModal(discord.ui.Modal, title="Text Send"):
         if not isinstance(interaction.channel, (discord.TextChannel, discord.Thread)):
             return await interaction.response.send_message("Use /chat in a text channel or thread.", ephemeral=True)
         try:
-            # The shared Firestore claim prevents duplicate posts when gateway sessions overlap.
+            # The shared Cloudflare R2 claim prevents duplicate posts when gateway sessions overlap.
             claimed = await asyncio.to_thread(self.moderator.store.claim_rate_limit, "chat_send", interaction.user.id, 2)
             if not claimed:
                 return await interaction.response.send_message("That message is already being sent. Please wait a moment.", ephemeral=True)
@@ -81,7 +100,7 @@ class TicketCreateView(discord.ui.View):
     """Persistent 'Create Ticket' dashboard button posted in the configured ticket channel."""
     def __init__(self, moderator):
         super().__init__(timeout=None); self.moderator = moderator
-        button = discord.ui.Button(label="Create Ticket", style=discord.ButtonStyle.primary, emoji="🎫", custom_id="ticket_dashboard:create")
+        button = discord.ui.Button(label="Create Ticket", style=discord.ButtonStyle.primary, emoji="\U0001f3ab", custom_id="ticket_dashboard:create")
         button.callback = self.open_ticket_modal; self.add_item(button)
 
     async def open_ticket_modal(self, interaction):
@@ -140,7 +159,7 @@ class TicketModal(discord.ui.Modal, title="Create Support Ticket"):
 class TicketCancelView(discord.ui.View):
     def __init__(self, moderator, document_id, owner_id, ticket_id):
         super().__init__(timeout=86400); self.moderator, self.document_id, self.owner_id, self.ticket_id = moderator, document_id, owner_id, ticket_id
-        button = discord.ui.Button(label="Cancel Ticket", style=discord.ButtonStyle.danger, emoji="✖")
+        button = discord.ui.Button(label="Cancel Ticket", style=discord.ButtonStyle.danger, emoji="\u274c")
         button.callback = self.request_cancel; self.add_item(button)
 
     async def request_cancel(self, interaction):
@@ -166,7 +185,7 @@ class TicketCancelConfirmView(discord.ui.View):
     def __init__(self, moderator, document_id, owner_id, ticket_id, origin_message=None):
         super().__init__(timeout=120); self.moderator, self.document_id, self.owner_id, self.ticket_id = moderator, document_id, owner_id, ticket_id
         # The original message that showed the "Cancel Ticket" button, so it can be stripped
-        # of that button once the cancellation actually goes through — otherwise the button
+        # of that button once the cancellation actually goes through or not otherwise the button
         # stays visible and clickable on a ticket that's already cancelled.
         self.origin_message = origin_message
         confirm = discord.ui.Button(label="Yes, Cancel Ticket", style=discord.ButtonStyle.danger)
@@ -190,9 +209,13 @@ class TicketCancelConfirmView(discord.ui.View):
         except Exception as exc:
             self.moderator.log(f"Ticket cancellation failed: {exc}")
             return await interaction.response.edit_message(content=f"Could not cancel the ticket: {exc}", view=None)
-        # Database write succeeded — remove the button now, regardless of whether the DM below succeeds,
+        # Database write succeeded or not remove the button now, regardless of whether the DM below succeeds,
         # so the ticket owner can never click "Cancel Ticket" again on a ticket that's already cancelled.
         await self._remove_cancel_button()
+        try:
+            await self.moderator.delete_ticket_channel(ticket)
+        except Exception as exc:
+            self.moderator.log(f"Could not delete cancelled ticket chat #{self.ticket_id}: {exc}")
         self.moderator.log(f"Ticket #{self.ticket_id} cancelled by its owner.")
         try:
             await interaction.user.send(f"Your support ticket **#{self.ticket_id}** has been cancelled successfully.")
@@ -210,7 +233,7 @@ class BirthdayDashboardView(discord.ui.View):
     """Persistent 'Add Birthday' dashboard button posted in the configured birthday channel."""
     def __init__(self, moderator):
         super().__init__(timeout=None); self.moderator = moderator
-        button = discord.ui.Button(label="Add Birthday", style=discord.ButtonStyle.primary, emoji="🎂", custom_id="birthday_dashboard:add")
+        button = discord.ui.Button(label="Add Birthday", style=discord.ButtonStyle.primary, emoji="\U0001f382", custom_id="birthday_dashboard:add")
         button.callback = self.open_birthday_flow; self.add_item(button)
 
     async def open_birthday_flow(self, interaction):
@@ -272,7 +295,7 @@ class BirthdayModal(discord.ui.Modal, title="Set Your Birthday"):
             return await interaction.response.send_message("Could not save your birthday. Please try again later.", ephemeral=True)
         shown = format_birthday({"day": day, "month": month, "year": year})
         self.moderator.log(f"{interaction.user} set their birthday to {shown}.")
-        await interaction.response.send_message(f"🎂 Your birthday has been set to **{shown}**. Only you can see this confirmation.", ephemeral=True)
+        await interaction.response.send_message(f"\U0001f382 Your birthday has been set to **{shown}**. Only you can see this confirmation.", ephemeral=True)
 
 
 class TicketStaffActionView(discord.ui.View):
@@ -281,9 +304,9 @@ class TicketStaffActionView(discord.ui.View):
         super().__init__(timeout=None)
         self.moderator, self.ticket = moderator, dict(ticket)
         document_id = self.ticket["document_id"]
-        resolved_button = discord.ui.Button(label="Resolved", style=discord.ButtonStyle.success, emoji="✅",
+        resolved_button = discord.ui.Button(label="Resolved", style=discord.ButtonStyle.success, emoji="\u2705",
                                              custom_id=f"ticket_staff:{document_id}:resolved")
-        closed_button = discord.ui.Button(label="Closed", style=discord.ButtonStyle.danger, emoji="🔒",
+        closed_button = discord.ui.Button(label="Closed", style=discord.ButtonStyle.danger, emoji="\U0001f512",
                                            custom_id=f"ticket_staff:{document_id}:closed")
         resolved_button.callback = self.mark_resolved
         closed_button.callback = self.mark_closed
@@ -367,7 +390,7 @@ class TempVoiceNameModal(discord.ui.Modal, title="Rename Temporary Voice Room"):
     async def on_submit(self, interaction):
         try:
             await self.moderator.rename_temp_room(interaction, self.channel_id, self.name.value.strip())
-            await interaction.response.send_message("✅ Voice room renamed.", ephemeral=True)
+            await interaction.response.send_message("\u2705 Voice room renamed.", ephemeral=True)
         except PermissionError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
         except Exception as exc:
@@ -378,7 +401,7 @@ class TempVoiceNameModal(discord.ui.Modal, title="Rename Temporary Voice Room"):
 class TempVoiceLimitModal(discord.ui.Modal, title="Set Temporary Voice Member Limit"):
     def __init__(self, moderator, channel_id, current_limit):
         super().__init__(); self.moderator, self.channel_id = moderator, channel_id
-        self.limit = discord.ui.TextInput(label="Member limit", default=str(current_limit or 0), placeholder="0 for unlimited; otherwise 1–99", max_length=2)
+        self.limit = discord.ui.TextInput(label="Member limit", default=str(current_limit or 0), placeholder="0 for unlimited; otherwise 1-99", max_length=2)
         self.add_item(self.limit)
 
     async def on_submit(self, interaction):
@@ -390,7 +413,8 @@ class TempVoiceLimitModal(discord.ui.Modal, title="Set Temporary Voice Member Li
             return await interaction.response.send_message("Enter a whole number from 0 to 99.", ephemeral=True)
         try:
             await self.moderator.set_temp_room_limit(interaction, self.channel_id, number)
-            await interaction.response.send_message(f"👥 Member limit set to **{'unlimited' if number == 0 else number}**.", ephemeral=True)
+            display_limit = "unlimited" if number == 0 else str(number)
+            await interaction.response.send_message(f"\U0001f465 Member limit set to **{display_limit}**.", ephemeral=True)
         except PermissionError as exc:
             await interaction.response.send_message(str(exc), ephemeral=True)
         except Exception as exc:
@@ -404,10 +428,10 @@ class TempVoiceControlView(discord.ui.View):
         super().__init__(timeout=None); self.moderator, self.room = moderator, dict(room)
         channel_id = self.room["channel_id"]
         controls = (
-            ("🔒 Lock", discord.ButtonStyle.danger, "lock", self.lock),
-            ("🔓 Unlock", discord.ButtonStyle.success, "unlock", self.unlock),
-            ("✏️ Rename", discord.ButtonStyle.primary, "rename", self.rename),
-            ("👥 Max", discord.ButtonStyle.secondary, "max", self.max_members),
+            ("\U0001f512 Lock", discord.ButtonStyle.danger, "lock", self.lock),
+            ("\U0001f513 Unlock", discord.ButtonStyle.success, "unlock", self.unlock),
+            ("\u270f\ufe0f Rename", discord.ButtonStyle.primary, "rename", self.rename),
+            ("\U0001f465 Max", discord.ButtonStyle.secondary, "max", self.max_members),
         )
         for label, style, action, callback in controls:
             button = discord.ui.Button(label=label, style=style, custom_id=f"tempvoice:{channel_id}:{action}")
@@ -447,6 +471,15 @@ class TempVoiceControlView(discord.ui.View):
             await interaction.response.send_message(str(exc), ephemeral=True)
 
 
+
+    async def invite(self, interaction):
+        try:
+            room = await self._room(interaction)
+            await interaction.response.send_modal(TempVoiceInviteModal(self.moderator, room["channel_id"]))
+        except PermissionError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+
+
 class DragMemberView(discord.ui.View):
     """Private two-step picker for moving voice members."""
     def __init__(self, moderator, guild, requester_id):
@@ -457,8 +490,8 @@ class DragMemberView(discord.ui.View):
         options = [discord.SelectOption(label=member.display_name[:100], value=str(member.id), description=(member.voice.channel.name if member.voice and member.voice.channel else "Voice")[:100]) for member in self.members[:25]]
         self.member_select = discord.ui.Select(placeholder="Select voice members (first 25 shown)", min_values=0, max_values=max(1, len(options)), options=options, disabled=not options)
         self.member_select.callback = self.select_members; self.add_item(self.member_select)
-        all_button = discord.ui.Button(label="Select All", style=discord.ButtonStyle.secondary, emoji="👥"); all_button.callback = self.select_all; self.add_item(all_button)
-        continue_button = discord.ui.Button(label="Choose target VC", style=discord.ButtonStyle.primary, emoji="➡️"); continue_button.callback = self.choose_target; self.add_item(continue_button)
+        all_button = discord.ui.Button(label="Select All", style=discord.ButtonStyle.secondary, emoji="\U0001f465"); all_button.callback = self.select_all; self.add_item(all_button)
+        continue_button = discord.ui.Button(label="Choose target VC", style=discord.ButtonStyle.primary, emoji="\u27a1\ufe0f"); continue_button.callback = self.choose_target; self.add_item(continue_button)
 
     async def interaction_check(self, interaction):
         if interaction.user.id == self.requester_id and self.moderator.drag_allowed(interaction.user): return True
@@ -505,12 +538,55 @@ class ModeratorBot:
         self.bot = None
         self.loop = None
         self.last_action, self.actions = {}, []
+        self.counting_locks = {}
         self.dashboard_views_registered = set()
         # `on_ready` may be called again after a Discord gateway resume. The
         # GUI inventory should be refreshed each time, but background loops must
         # only exist once or a reconnect would create duplicate workers.
         self.background_tasks_started = False
 
+    async def track_member_voice_activity(self, member, before, after):
+        """Record voice joins, moves, leaves, and time spent in this server only."""
+        if member.bot or before.channel == after.channel:
+            return
+        if before.channel:
+            session = await asyncio.to_thread(self.store.end_member_voice_session, member.guild.id, member.id)
+            if session:
+                started = datetime.fromisoformat(session["started_at"])
+                duration = max(0, round((datetime.now(timezone.utc) - started).total_seconds()))
+                await asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "voice_left", {"channel": session.get("channel_name", before.channel.name), "duration_seconds": duration})
+        if after.channel:
+            started = await asyncio.to_thread(self.store.start_member_voice_session, member.guild.id, member.id, str(member), after.channel.name)
+            if started:
+                await asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "voice_joined", {"channel": after.channel.name})
+
+    async def notify_external_guild_owner(self, guild):
+        """Post one notice in an unauthorized guild, then leave it."""
+        if guild.id == APP_CONFIG.allowed_guild_id:
+            return False
+        try:
+            claimed = await asyncio.to_thread(self.store.claim_external_guild_notice, guild.id)
+        except Exception as exc:
+            self.log(f"Could not claim external-server notice for {guild.name}: {exc}")
+            claimed = False
+        if claimed:
+            candidates = [guild.system_channel] + list(guild.text_channels)
+            for channel in candidates:
+                if channel is None:
+                    continue
+                try:
+                    await channel.send(EXTERNAL_GUILD_OWNER_NOTICE, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
+                    self.log(f"Posted MetaVerse Bangladesh contract notice in #{channel.name} for {guild.name} ({guild.id}).")
+                    break
+                except (discord.Forbidden, discord.HTTPException):
+                    continue
+        try:
+            await guild.leave()
+            self.log(f"Left unauthorized server {guild.name} ({guild.id}).")
+            return True
+        except discord.HTTPException as exc:
+            self.log(f"Could not leave unauthorized server {guild.name} ({guild.id}): {exc}")
+            return False
     def _role_allowed(self, member, setting_name):
         """Check one independently managed per-guild role permission."""
         if not member or not getattr(member, "guild", None):
@@ -593,6 +669,56 @@ class ModeratorBot:
             "voice_xp_ignore_deafened": bool(config.get("voice_xp_ignore_deafened", True)),
         }
 
+    def blocked_words(self, guild_id):
+        """Return the shared per-server word-block list, normalized for matching."""
+        return list(dict.fromkeys(
+            str(word).strip().casefold()
+            for word in self.settings.get("word_blocks", {}).get(str(guild_id), [])
+            if str(word).strip()
+        ))
+
+    async def handle_word_block(self, message):
+        """Delete a blocked message and permanently ban at the fifth shared strike."""
+        content = message.content.casefold()
+        matched = next((word for word in self.blocked_words(message.guild.id)
+                        if re.search(rf"(?<!\w){re.escape(word)}(?!\w)", content)), None)
+        if not matched:
+            return False
+        try:
+            violation = await asyncio.to_thread(
+                self.store.record_word_block_violation, message.guild.id, message.author.id, matched, message.id,
+            )
+            if violation.get("duplicate"):
+                return True
+            strikes = int(violation["count"])
+            await asyncio.to_thread(
+                self.store.record_member_activity, message.guild.id, message.author.id, str(message.author),
+                "word_spam", {"word": matched, "strikes": strikes, "channel": getattr(message.channel, "name", "unknown"), "content": message.content[:1000]},
+                f"word_spam_{message.id}",
+            )
+        except Exception as exc:
+            self.log(f"Could not record blocked-word violation in {message.guild.name}: {exc}")
+            return False
+        try:
+            await message.delete()
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            pass
+        if strikes < 5:
+            self.log(f"Blocked word '{matched}' from {message.author} in {message.guild.name} ({strikes}/5).")
+            return True
+        if message.author.id in PROTECTED_USER_IDS:
+            self.log(f"Blocked-word threshold reached by protected user {message.author}; ban skipped.")
+            return True
+        try:
+            await message.author.ban(reason=f"Permanent ban: 5 blocked-word violations (latest: {matched})", delete_message_seconds=0)
+            await asyncio.to_thread(
+                self.store.record_member_activity, message.guild.id, message.author.id, str(message.author),
+                "word_spam_banned", {"word": matched, "strikes": strikes}, f"word_spam_banned_{message.id}",
+            )
+            self.log(f"Permanently banned {message.author} in {message.guild.name} after {strikes} blocked-word violations.")
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            self.log(f"Could not ban blocked-word spammer {message.author} in {message.guild.name}: {exc}")
+        return True
     def default_role_ids(self, guild_id):
         """Return the configured auto-role ids for a server (strings)."""
         return list(self.settings.get("default_roles", {}).get(str(guild_id), []))
@@ -713,7 +839,7 @@ class ModeratorBot:
     async def award_xp(self, guild, config, member, xp, cooldown_seconds, source, fallback_channel=None):
         """Shared XP grant + level-up announcement used by both text and voice activity.
 
-        Firestore's transaction in `award_activity_xp` makes this safe even if the GUI
+        Cloudflare R2's transaction in `award_activity_xp` makes this safe even if the GUI
         and Railway worker briefly overlap: only one award per cooldown window per
         source is ever applied, so XP and levels stay perfectly in sync between them.
         """
@@ -734,7 +860,7 @@ class ModeratorBot:
         if channel is None or not hasattr(channel, "send"):
             return
         embed = discord.Embed(
-            title="🎉 Level Up!",
+            title="\U0001f389 Level Up!",
             description=f"Congratulations {member.mention}!\nYou reached level **{result['level']}**.",
             colour=discord.Colour.gold(),
         )
@@ -748,29 +874,31 @@ class ModeratorBot:
             self.log(f"Could not send level-up message: {exc}")
 
     async def handle_counting_message(self, message):
-        """Validate 1, 2, 3… in the configured channel with a shared Firebase state."""
+        """Validate 1, 2, 3… in the configured channel with a shared Cloudflare R2 state."""
         configured_channel = str(self.settings.get("counting_channels", {}).get(str(message.guild.id), ""))
         if configured_channel != str(message.channel.id):
             return
         text = message.content.strip()
-        # Accept both English (1, 2, 3) and Bangla (১, ২, ৩) digits. Normalize
-        # before comparing so a valid reset "১" is treated exactly like "1".
-        normalized_text = text.translate(str.maketrans("০১২৩৪৫৬৭৮৯", "0123456789"))
+        # Accept both English and Bangla digits. Normalize before comparing.
+        # before comparing so a valid reset "1" is treated exactly like "1".
+        normalized_text = text.translate(str.maketrans("\u09e6\u09e7\u09e8\u09e9\u09ea\u09eb\u09ec\u09ed\u09ee\u09ef", "0123456789"))
         valid_number = bool(re.fullmatch(r"[0-9]+", normalized_text)) and str(int(normalized_text)) == normalized_text
         submitted = int(normalized_text) if valid_number else -1
-        try:
-            result = await asyncio.to_thread(
-                self.store.submit_counting_number, message.guild.id, message.channel.id,
-                message.author.id, message.id, submitted,
-            )
-        except Exception as exc:
-            self.log(f"Counting check failed in {message.guild.name}: {exc}")
-            return
+        lock = self.counting_locks.setdefault((message.guild.id, message.channel.id), asyncio.Lock())
+        async with lock:
+            try:
+                result = await asyncio.to_thread(
+                    self.store.submit_counting_number, message.guild.id, message.channel.id,
+                    message.author.id, message.id, submitted,
+                )
+            except Exception as exc:
+                self.log(f"Counting check failed in {message.guild.name}: {exc}")
+                return
         if result.get("duplicate"):
             return
         if result["correct"]:
             try:
-                await message.add_reaction("✅")
+                await message.add_reaction("\u2705")
             except (discord.Forbidden, discord.HTTPException) as exc:
                 self.log(f"Could not react to counting message in {message.guild.name}: {exc}")
             self.log(f"Counting: {message.author} correctly sent {submitted} in {message.guild.name}.")
@@ -778,10 +906,12 @@ class ModeratorBot:
         # Show the invalid attempt briefly, then remove it so the counting channel
         # keeps only valid progress messages.
         try:
-            await message.add_reaction("❌")
+            await message.add_reaction("\u274c")
             await asyncio.sleep(2)
             await message.delete()
-        except (discord.Forbidden, discord.NotFound, discord.HTTPException) as exc:
+        except discord.NotFound:
+            pass  # The other shared worker already removed this invalid message.
+        except (discord.Forbidden, discord.HTTPException) as exc:
             self.log(f"Could not mark/remove wrong counting message in {message.guild.name}: {exc}")
         self.log(f"Counting kept at {result['expected']} in {message.guild.name}: {message.author} sent {text!r}.")
     async def handle_level_activity(self, message):
@@ -803,7 +933,7 @@ class ModeratorBot:
         """Background loop: award XP to members actively on a voice call.
 
         Runs every 15 seconds, but each member's own `voice_xp_interval_seconds`
-        cooldown (enforced atomically in Firestore) decides how often they actually
+        cooldown (enforced atomically in Cloudflare R2) decides how often they actually
         earn XP, so this is safe to run from both the GUI and Railway.
         """
         while not self.bot.is_closed():
@@ -834,14 +964,14 @@ class ModeratorBot:
                         continue
                     await self.award_xp(
                         guild, config, member, config["voice_xp_amount"],
-                        config["voice_xp_interval_seconds"], "voice",
+                        config["voice_xp_interval_seconds"] * 3, "voice",
                     )
 
     async def role_notification_tick(self):
         """Background loop: fire scheduled role-ping notifications at their configured time.
 
         Runs every 20 seconds and checks each server's saved schedule against the
-        the timezone saved with that notification. The GUI detects the operator's local timezone and Railway uses the same saved timezone. A Firestore transaction makes sure the reminder is
+        the timezone saved with that notification. The GUI detects the operator's local timezone and Railway uses the same saved timezone. A Cloudflare R2 transaction makes sure the reminder is
         sent exactly once per day even if the GUI and Railway both happen to check in
         the same minute.
         """
@@ -900,20 +1030,21 @@ class ModeratorBot:
                 mentions = " ".join(role.mention for role in roles)
                 # Empty custom text deliberately means a clean role-only ping.
                 text = (entry.get("message") or "").strip()
+                embed = discord.Embed(title="\u2728 Server Announcement", description=text or "A new server announcement is here!", colour=discord.Colour.blurple())
                 file = None
                 try:
                     image = await asyncio.to_thread(self.store.get_notification_image, entry.get("image_id"))
                     if image:
                         content_type, data = image
-                        extension = "png" if content_type == "image/png" else "jpg"
-                        file = discord.File(io.BytesIO(data), filename=f"notification.{extension}")
+                        extension = image_extension(content_type, data)
+                        filename = f"notification.{extension}"
+                        file = discord.File(io.BytesIO(data), filename=filename)
+                        embed.set_image(url=f"attachment://{filename}")
                 except Exception as exc:
                     self.log(f"Could not load role notification image: {exc}")
                 try:
-                    await channel.send(
-                        " ".join(part for part in (mentions, text) if part), file=file,
-                        allowed_mentions=discord.AllowedMentions(roles=True, everyone=False, users=False),
-                    )
+                    await channel.send(mentions or None, embed=embed, file=file,
+                                       allowed_mentions=discord.AllowedMentions(roles=True, everyone=False, users=False))
                     self.log(f"Sent scheduled role notification in {guild.name} #{channel.name}.")
                 except (discord.Forbidden, discord.HTTPException) as exc:
                     self.log(f"Could not send role notification in {guild.name}: {exc}")
@@ -952,14 +1083,14 @@ class ModeratorBot:
             if not claimed:
                 continue
             title = (config.get("title") or "Movie Night").strip()
-            embed = discord.Embed(title=f"🎬 {title}", description=(config.get("message") or "Join us for movie time!").strip(), colour=discord.Colour.blurple())
+            embed = discord.Embed(title=f"\U0001f3ac {title}", description=(config.get("message") or "Join us for movie time!").strip(), colour=discord.Colour.blurple())
             embed.add_field(name="Movie time", value=now.strftime("%I:%M %p %Z"), inline=False)
             file = None
             try:
                 image = await asyncio.to_thread(self.store.get_notification_image, config.get("image_id"))
                 if image:
                     content_type, data = image
-                    extension = "png" if content_type == "image/png" else "jpg"
+                    extension = image_extension(content_type, data)
                     filename = f"movie.{extension}"
                     file = discord.File(io.BytesIO(data), filename=filename)
                     embed.set_image(url=f"attachment://{filename}")
@@ -974,7 +1105,7 @@ class ModeratorBot:
         """Background loop: check for member birthdays roughly once a minute.
 
         Fires exactly once per member per calendar day in the saved timezone
-        thanks to the Firestore claim in `check_birthdays`, so GUI and Railway never
+        thanks to the Cloudflare R2 claim in `check_birthdays`, so GUI and Railway never
         double-post the same wish even if both are online at once.
         """
         while not self.bot.is_closed():
@@ -1023,13 +1154,13 @@ class ModeratorBot:
         roles = [guild.get_role(int(role_id)) for role_id in role_ids]
         roles = [role for role in roles if role]
         embed = discord.Embed(
-            title="🎉 Happy Birthday! 🎉",
+            title="\U0001f389 Happy Birthday! \U0001f389",
             description=(
-                f"Today we celebrate **{member.display_name}**! 🎂\n\n"
+                f"Today we celebrate **{member.display_name}**! \U0001f382\n\n"
                 "From everyone at **Metaverse**, thank you for helping make this community welcoming, "
                 "creative, and full of great memories. May your new year bring happiness, good health, success, "
                 "and exciting new adventures.\n\n"
-                "Wishing you a truly wonderful birthday! 🥳✨"
+                "Wishing you a truly wonderful birthday! \U0001f973\u2728"
             ),
             colour=discord.Colour.gold(),
         )
@@ -1039,7 +1170,7 @@ class ModeratorBot:
             image = await asyncio.to_thread(self.store.get_birthday_image, image_id)
             if image:
                 content_type, data = image
-                extension = "png" if content_type == "image/png" else "jpg"
+                extension = image_extension(content_type, data)
                 filename = f"birthday.{extension}"
                 file = discord.File(io.BytesIO(data), filename=filename)
                 embed.set_image(url=f"attachment://{filename}")
@@ -1087,7 +1218,7 @@ class ModeratorBot:
                         pass
             try:
                 message = await channel.send(
-                    "## 🎂 Birthdays\nAdd your birthday so the server can celebrate with you! Click below.",
+                    "## \U0001f382 Birthdays\nAdd your birthday so the server can celebrate with you! Click below.",
                     view=BirthdayDashboardView(self),
                 )
                 await asyncio.to_thread(self.store.save_birthday_dashboard, guild_id, channel_id, message.id)
@@ -1097,9 +1228,9 @@ class ModeratorBot:
 
     def dashboard_text(self, room, locked=None):
         locked = room.get("locked", False) if locked is None else locked
-        state = "🔒 Locked" if locked else "🔓 Open"
+        state = "\U0001f512 Locked" if locked else "\U0001f513 Open"
         limit = room.get("user_limit", 0) or "Unlimited"
-        return f"## 🎛️ Temporary Voice Controls\nOwner: <@{room['owner_id']}>\nStatus: **{state}** • Limit: **{limit}**\nOnly the room owner can use these controls."
+        return f'## \U0001f39b\ufe0f Temporary Voice Controls\nOwner: <@{room.get("owner_id")}>\nStatus: **{state}** \u2022 Limit: **{limit}**\nOnly the room owner can use these controls.'
 
     async def dashboard_room_for_interaction(self, interaction, channel_id):
         """Authorize the owner only when clicking inside their active voice-channel chat."""
@@ -1132,12 +1263,38 @@ class ModeratorBot:
         room["user_limit"] = number
         await asyncio.to_thread(self.store.save_temp_voice_room, room)
 
+    async def invite_temp_room_member(self, interaction, room, user_id):
+        if not str(user_id).isdigit():
+            raise PermissionError("Enter a numeric Discord user ID.")
+        member = interaction.guild.get_member(int(user_id))
+        if not member:
+            try:
+                member = await interaction.guild.fetch_member(int(user_id))
+            except discord.NotFound as exc:
+                raise PermissionError("That user is not a member of this server.") from exc
+        if member.bot or member.id == interaction.user.id:
+            raise PermissionError("Choose a normal server member other than yourself.")
+        channel = interaction.guild.get_channel(int(room["channel_id"]))
+        if not isinstance(channel, discord.VoiceChannel):
+            raise PermissionError("This temporary voice room is no longer available.")
+        await channel.set_permissions(member, view_channel=True, connect=True,
+                                      reason="Temporary room owner invitation")
+        invited = list(dict.fromkeys([str(x) for x in room.get("invited_user_ids", [])] + [str(member.id)]))
+        room["invited_user_ids"] = invited
+        await asyncio.to_thread(self.store.save_temp_voice_room, room)
+        return member
+
     async def set_temp_room_lock(self, interaction, room, locked):
         channel = interaction.guild.get_channel(int(room["channel_id"]))
         await channel.set_permissions(interaction.guild.default_role, view_channel=True, connect=not locked,
                                       reason=f"Temporary room {'locked' if locked else 'unlocked'}")
         await channel.set_permissions(interaction.user, manage_channels=True, move_members=True, view_channel=True, connect=True,
                                       reason="Keep temporary room owner access")
+        for invited_id in room.get("invited_user_ids", []):
+            invited = interaction.guild.get_member(int(invited_id))
+            if invited:
+                await channel.set_permissions(invited, view_channel=True, connect=True,
+                                              reason="Temporary room owner invitation")
         room["locked"] = locked
         await asyncio.to_thread(self.store.save_temp_voice_room, room)
 
@@ -1160,31 +1317,69 @@ class ModeratorBot:
             self.log(f"Temporary voice dashboard restore failed: {exc}")
 
     async def send_member_greeting(self, member, kind):
+
+        try:
+            # Always use the newest GUI-saved welcome configuration from R2.
+            self.settings = await asyncio.to_thread(self.store.get_settings)
+        except Exception as exc:
+            self.log(f"Could not refresh welcome settings: {exc}")
         config = self.settings.get("welcome_goodbye", {}).get(str(member.guild.id), {})
         channel_id = config.get(f"{kind}_channel_id")
-        if not channel_id:
-            return
-        channel = member.guild.get_channel(int(channel_id))
+        channel = None
+        if channel_id:
+            try:
+                channel = member.guild.get_channel(int(channel_id))
+                if channel is None:
+                    channel = await member.guild.fetch_channel(int(channel_id))
+            except (ValueError, TypeError, discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
+                self.log(f"Configured {kind} channel unavailable in {member.guild.name}: {exc}")
+        # If GUI config is missing/stale, use the server system channel or first text channel.
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            self.log(f"Configured {kind} channel is unavailable in {member.guild.name}.")
+            channel = member.guild.system_channel
+        if not isinstance(channel, discord.TextChannel):
+            me = member.guild.me
+            channel = next((item for item in member.guild.text_channels if me and item.permissions_for(me).send_messages), None)
+        if channel is None:
+            self.log(f"No writable welcome channel found in {member.guild.name}.")
+            return
+        try:
+            claimed = await asyncio.to_thread(self.store.claim_member_greeting, member.guild.id, member.id, kind)
+        except Exception as exc:
+            # Greeting must not disappear just because the anti-duplicate store is temporarily unavailable.
+            self.log(f"Could not claim {kind} greeting event; sending once anyway: {exc}")
+            claimed = True
+        if not claimed:
+            self.log(f"Skipped duplicate {kind} greeting event for {member} in {member.guild.name}.")
             return
         heading = "Welcome" if kind == "welcome" else "Goodbye"
         custom = config.get(f"{kind}_message", "").strip()
-        content = f"**{heading}** {member.mention}" + (f"\n{custom}" if custom else "")
+        color = discord.Colour.green() if kind == "welcome" else discord.Colour.orange()
+        embed = discord.Embed(title=f"\u2728 {heading}", description=custom or ("Welcome to our premium community!" if kind == "welcome" else "We will miss you!"), colour=color)
+        embed.set_thumbnail(url=str(member.display_avatar.url))
         image_id = config.get(f"{kind}_image_id")
+        file = None
+        if image_id:
+            try:
+                image = await asyncio.to_thread(self.store.get_welcome_goodbye_image, image_id)
+                if image:
+                    content_type, data = image
+                    extension = image_extension(content_type, data)
+                    filename = f"{kind}.{extension}"
+                    file = discord.File(io.BytesIO(data), filename=filename)
+                    embed.set_image(url=f"attachment://{filename}")
+            except Exception as exc:
+                self.log(f"Could not load {kind} image; sending text greeting: {exc}")
         try:
-            image = await asyncio.to_thread(self.store.get_welcome_goodbye_image, image_id)
-            if image:
-                content_type, data = image
-                extension = "png" if content_type == "image/png" else "jpg"
-                await channel.send(content, file=discord.File(io.BytesIO(data), filename=f"{kind}.{extension}"))
-            else:
-                await channel.send(content)
+            await channel.send(member.mention, embed=embed, file=file,
+                               allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
         except Exception as exc:
             self.log(f"Could not send {kind} message in {member.guild.name}: {exc}")
 
     async def create_temp_room(self, member, lobby):
         guild = member.guild
+
+        if lobby is None:
+            raise RuntimeError("The configured temporary voice lobby is unavailable. Re-select and save the lobby in the GUI.")
         # A display name can contain characters Discord rejects in channel names; Discord applies its own final validation.
         room_name = f"{member.display_name}'s Room"[:100]
         # New rooms are joinable by default.  Copying a restricted lobby/category overwrite
@@ -1194,17 +1389,20 @@ class ModeratorBot:
             guild.default_role: everyone,
             member: discord.PermissionOverwrite(manage_channels=True, move_members=True, view_channel=True, connect=True),
         }
-        room = await guild.create_voice_channel(room_name, category=lobby.category, overwrites=overwrites,
+        room = await guild.create_voice_channel("Temp Room", category=getattr(lobby, "category", None), overwrites=overwrites,
                                                 reason="Temporary voice room")
         record = {"guild_id": str(guild.id), "channel_id": str(room.id), "lobby_id": str(lobby.id),
                   "owner_id": str(member.id), "owner_name": str(member), "name": room.name,
-                  "status": "active", "created_at": discord.utils.utcnow().isoformat()}
+                  "status": "active", "invited_user_ids": [], "created_at": discord.utils.utcnow().isoformat()}
         try:
+            # Move first; rename, R2 persistence, and panel follow.
+            await member.move_to(room, reason="Moved into their temporary voice room")
+            await room.edit(name=room_name, reason="Set temporary room name")
+            record["name"] = room.name
             await asyncio.to_thread(self.store.save_temp_voice_room, record)
             dashboard = await room.send(self.dashboard_text(record), view=TempVoiceControlView(self, record))
             record["dashboard_message_id"] = str(dashboard.id)
             await asyncio.to_thread(self.store.save_temp_voice_room, record)
-            await member.move_to(room, reason="Moved into their temporary voice room")
         except Exception:
             await room.delete(reason="Temporary room setup failed")
             raise
@@ -1216,7 +1414,7 @@ class ModeratorBot:
         lobby_id = self.temp_lobby_id(member.guild.id)
         if lobby_id and after.channel and str(after.channel.id) == lobby_id and before.channel != after.channel:
             try:
-                # GUI and Railway can briefly overlap during configuration.  The Firebase
+                # GUI and Railway can briefly overlap during configuration.  The Cloudflare R2
                 # claim makes this event idempotent across both processes.
                 claimed = await asyncio.to_thread(
                     self.store.claim_temp_voice_creation, member.guild.id, after.channel.id, member.id
@@ -1276,7 +1474,7 @@ class ModeratorBot:
                         pass
             try:
                 message = await channel.send(
-                    "## 🎫 Support Tickets\nNeed help? Click below to describe your issue and open a private ticket.",
+                    "## \U0001f3ab Support Tickets\nNeed help? Click below to describe your issue and open a private ticket.",
                     view=TicketCreateView(self),
                 )
                 await asyncio.to_thread(self.store.save_ticket_dashboard, guild_id, channel_id, message.id)
@@ -1294,9 +1492,9 @@ class ModeratorBot:
                     channels_changed = fresh.get("ticket_channels") != self.settings.get("ticket_channels")
                     birthday_channels_changed = fresh.get("birthdays") != self.settings.get("birthdays")
                     self.settings = fresh
-                    self.log("Settings synchronized from Firebase.")
+                    self.log("Settings synchronized from Cloudflare R2.")
                     if token_changed:
-                        self.log("Discord token changed in Firebase; reconnecting with the new token.")
+                        self.log("Discord token changed in Cloudflare R2; reconnecting with the new token.")
                         await self.bot.close()
                         return
                     if channels_changed:
@@ -1304,7 +1502,7 @@ class ModeratorBot:
                     if birthday_channels_changed:
                         await self.ensure_birthday_dashboards()
             except Exception as exc:
-                self.log(f"Firebase settings refresh failed: {exc}")
+                self.log(f"Cloudflare R2 settings refresh failed: {exc}")
 
     def build(self):
         intents = discord.Intents.default(); intents.message_content = True; intents.members = True
@@ -1315,9 +1513,13 @@ class ModeratorBot:
         async def on_ready():
             self.loop = asyncio.get_running_loop()
             self.log(f"Logged in as {bot.user} ({self.source})")
+            self.log(f"Welcome diagnostics: members_intent={bot.intents.members}, guilds={len(bot.guilds)}")
             self.event("invite", discord.utils.oauth_url(bot.user.id, permissions=INVITE_PERMISSIONS, scopes=("bot", "applications.commands")))
             self.event("guilds", [(g.id, g.name) for g in bot.guilds])
             for guild in bot.guilds:
+                if guild.id != APP_CONFIG.allowed_guild_id:
+                    asyncio.create_task(self.notify_external_guild_owner(guild))
+                    continue
                 # Roles and channels arrive with the guild and do not need a full
                 # member-cache request. Waiting for guild.chunk() here could
                 # leave the GUI connected but blank for a long time (or forever)
@@ -1331,7 +1533,10 @@ class ModeratorBot:
                 self.background_tasks_started = True
                 asyncio.create_task(self.refresh_settings())
                 asyncio.create_task(self.restore_temp_voice_dashboards())
-                asyncio.create_task(self.voice_xp_tick())
+                # Railway is the sole voice-XP scheduler; it shares Cloudflare R2 state
+                # with the GUI without creating duplicate transaction writers.
+                if self.source == "railway":
+                    asyncio.create_task(self.voice_xp_tick())
                 asyncio.create_task(self.role_notification_tick())
                 asyncio.create_task(self.movie_announcement_tick())
                 bot.add_view(TicketCreateView(self))
@@ -1353,26 +1558,58 @@ class ModeratorBot:
         @bot.event
         async def on_guild_join(guild):
             self.log(f"Joined {guild.name}")
+            if guild.id != APP_CONFIG.allowed_guild_id:
+                await self.notify_external_guild_owner(guild)
+                return
             self.event("guilds", [(g.id, g.name) for g in bot.guilds])
             self.event("guild", self.guild_info(guild))
-
         @bot.event
         async def on_voice_state_update(member, before, after):
+            # Keep R2 activity logging off the critical temporary-room path.
+            asyncio.create_task(self.track_member_voice_activity(member, before, after))
             await self.handle_temp_voice_update(member, before, after)
-
         @bot.event
         async def on_member_join(member):
+            self.log(f"Member join event received: {member} ({member.id}) in {member.guild.name}; bot={member.bot}")
+            # Welcome is sent for every joining member, including bot accounts.
             await self.send_member_greeting(member, "welcome")
+            if member.bot:
+                return
+            asyncio.create_task(asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "member_joined", {}))
             await self.apply_default_roles(member)
-
         @bot.event
         async def on_member_remove(member):
+            await asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "member_left", {})
             await self.send_member_greeting(member, "goodbye")
+
+        @bot.event
+        async def on_message_delete(message):
+            # Cached messages retain their text, so manual and bot deletions remain
+            # visible to the server's saved monitoring targets.
+            if message.author.bot or not message.guild:
+                return
+            await asyncio.to_thread(
+                self.store.record_member_activity, message.guild.id, message.author.id, str(message.author),
+                "message_deleted", {"channel": getattr(message.channel, "name", "unknown"), "content": message.content[:1000]},
+                f"message_deleted_{message.id}",
+            )
 
         @bot.event
         async def on_message(message):
             if message.author.bot or not message.guild:
                 return await bot.process_commands(message)
+            asyncio.create_task(asyncio.to_thread(self.store.record_member_activity, message.guild.id, message.author.id, str(message.author), "message", {"channel": getattr(message.channel, "name", "unknown"), "content": message.content[:1000]}, f"message_{message.id}"))
+            if await self.handle_word_block(message):
+                return
+            # Discord invites are always blocked. Discord does not expose an invite's
+            # destination without resolving it, so this safely blocks all server invites.
+            if DISCORD_INVITE_PATTERN.search(message.content):
+                try:
+                    await message.delete()
+                    await asyncio.to_thread(self.store.record_member_activity, message.guild.id, message.author.id, str(message.author), "discord_invite_blocked", {"channel": getattr(message.channel, "name", "unknown"), "content": message.content[:1000]}, f"invite_{message.id}")
+                except (discord.Forbidden, discord.NotFound) as exc:
+                    self.log(f"Cannot delete Discord invite: {exc}")
+                return
             # Link Send Permissions are independent from /chat. Only the selected
             # roles may post a URL; normal messages are never affected.
             if LINK_PATTERN.search(message.content) and not self.link_allowed(message.author):
@@ -1383,7 +1620,7 @@ class ModeratorBot:
                     self.log(f"Cannot delete unauthorized link: {exc}")
                 return
             await self.handle_counting_message(message)
-            await self.handle_level_activity(message)
+            asyncio.create_task(self.handle_level_activity(message))
             await bot.process_commands(message)
         @bot.tree.command(name="chat", description="Open a form and send a message in this channel")
         @app_commands.guild_only()
@@ -1434,7 +1671,10 @@ class ModeratorBot:
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             owner: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
         }
-        for staff_id in TICKET_CHANNEL_STAFF_IDS:
+        staff_ids=set(TICKET_CHANNEL_STAFF_IDS)
+        assigned_id=str(ticket.get("assigned_moderator_id") or "")
+        if assigned_id.isdigit(): staff_ids.add(int(assigned_id))
+        for staff_id in staff_ids:
             try:
                 staff = guild.get_member(staff_id) or await guild.fetch_member(staff_id)
                 overwrites[staff] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
@@ -1491,12 +1731,12 @@ class ModeratorBot:
         except discord.NotFound:
             self.log(f"Assigned ticket moderator {staff_id} was not found.")
             return
-        category = ticket["category"] + (f" — {ticket['other_category']}" if ticket.get("other_category") else "")
-        embed = discord.Embed(title=f"🎫 New Support Ticket #{ticket['ticket_id']}", colour=discord.Colour.blurple())
+        category = ticket["category"] + (f" ? {ticket['other_category']}" if ticket.get("other_category") else "")
+        embed = discord.Embed(title="\U0001f3ab New Support Ticket #" + str(ticket.get("ticket_id")), colour=discord.Colour.blurple())
         embed.add_field(name="From", value=f"{ticket['username']} (`{ticket['user_id']}`)", inline=False)
         embed.add_field(name="Category", value=category or "-", inline=False)
-        embed.add_field(name="Problem", value=(ticket.get("problem") or "-")[:1024], inline=False)
-        embed.set_footer(text=f"Created {ticket.get('created_at', '-')}")
+        category = ticket["category"] + (" - " + str(ticket["other_category"]) if ticket.get("other_category") else "")
+        embed = discord.Embed(title="Ticket #" + str(ticket.get("ticket_id")), colour=discord.Colour.blurple())
         try:
             message = await staff.send(embed=embed, view=TicketStaffActionView(self, ticket))
         except discord.Forbidden:
@@ -1546,4 +1786,31 @@ class ModeratorBot:
         if action == "kick": await member.kick(reason=reason or "GUI moderation action")
         elif action == "ban": await member.ban(reason=reason or "GUI moderation action", delete_message_seconds=0)
         else: raise RuntimeError("Unsupported moderation action.")
+        await asyncio.to_thread(self.store.record_member_activity, guild_id, user_id, str(member), f"member_{action}ed", {"reason": reason or "GUI moderation action"})
         self.log(f"{action.title()}ed {member} from {guild.name}.")
+
+class TempVoiceInviteModal(discord.ui.Modal, title="Invite member to temporary VC"):
+    def __init__(self, moderator, channel_id):
+        super().__init__()
+        self.moderator = moderator
+        self.channel_id = channel_id
+        self.user_id = discord.ui.TextInput(label="Member Discord ID", placeholder="123456789012345678", max_length=20)
+        self.add_item(self.user_id)
+
+    async def on_submit(self, interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            room = await self.moderator.dashboard_room_for_interaction(interaction, self.channel_id)
+            member = await self.moderator.invite_temp_room_member(interaction, room, self.user_id.value.strip())
+            await interaction.followup.send(f"\u2705 {member.mention} can now enter this temporary voice room, including when it is locked.", ephemeral=True)
+        except (PermissionError, discord.Forbidden, discord.HTTPException) as exc:
+            await interaction.followup.send(f"Could not invite that member: {exc}", ephemeral=True)
+
+
+
+
+
+
+
+
+
