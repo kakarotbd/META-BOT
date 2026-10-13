@@ -1,4 +1,4 @@
-﻿"""Encrypted Cloudflare R2 storage for all bot state.
+"""Encrypted Cloudflare R2 storage for all bot state.
 
 R2 is an object store, so records are stored as small encrypted JSON objects
 `<control-id>/records/<collection>/<id>.json`; media is stored as binary R2
@@ -12,7 +12,7 @@ import boto3
 from botocore.exceptions import ClientError
 from cryptography.fernet import Fernet, InvalidToken
 
-DEFAULT_SETTINGS = {"token":"", "auto_connect":True, "allowed_roles":{}, "command_allowed_roles":{}, "chat_allowed_roles":{}, "link_allowed_roles":{}, "drag_allowed_roles":{}, "ticket_channels":{}, "ticket_moderators":{}, "temp_voice_lobbies":{}, "welcome_goodbye":{}, "leveling":{}, "role_notifications":{}, "movie_announcements":{}, "default_roles":{}, "default_role_managed_ids":{}, "birthdays":{}, "counting_channels":{}, "monitored_users":{}, "word_blocks":{}, "max_warnings_before_timeout":5, "timeout_minutes":10, "settings_revision":1}
+DEFAULT_SETTINGS = {"token":"", "auto_connect":True, "allowed_roles":{}, "command_allowed_roles":{}, "chat_allowed_roles":{}, "link_allowed_roles":{}, "drag_allowed_roles":{}, "ticket_channels":{}, "ticket_moderators":{}, "temp_voice_lobbies":{}, "welcome_goodbye":{}, "leveling":{}, "role_notifications":{}, "movie_announcements":{}, "default_roles":{}, "default_role_managed_ids":{}, "birthdays":{}, "counting_channels":{}, "monitored_users":{}, "word_blocks":{}, "custom_commands":{}, "max_warnings_before_timeout":5, "timeout_minutes":10, "settings_revision":1}
 
 class CloudflareR2Store:
     def __init__(self):

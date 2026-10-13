@@ -1,4 +1,5 @@
-﻿import asyncio
+import asyncio
+import functools
 import io
 import re
 import re
@@ -1482,6 +1483,38 @@ class ModeratorBot:
             except (discord.Forbidden, discord.HTTPException) as exc:
                 self.log(f"Could not post ticket dashboard in {guild.name}: {exc}")
 
+
+    @staticmethod
+    def _valid_custom_command_name(name):
+        return bool(re.fullmatch(r"[a-z0-9_-]{1,32}", str(name).strip().lower()))
+
+    def _custom_command_names(self):
+        return {str(name) for commands in self.settings.get("custom_commands", {}).values() for name in commands}
+
+    def _register_custom_commands(self, bot):
+        """Register GUI-defined guild slash commands with Discord's native member picker."""
+        for guild_id, commands_config in self.settings.get("custom_commands", {}).items():
+            guild = discord.Object(id=int(guild_id))
+            for raw_name, config in commands_config.items():
+                name = str(raw_name).strip().lower()
+                urls = [str(url).strip() for url in config.get("gifs", []) if str(url).strip().startswith(("http://", "https://"))]
+                if not self._valid_custom_command_name(name) or not urls:
+                    continue
+                async def action(interaction: discord.Interaction, target: discord.Member, _config, _name):
+                    if target.bot:
+                        return await interaction.response.send_message("Please choose a real server member.", ephemeral=True)
+                    selected = [str(url).strip() for url in _config.get("gifs", []) if str(url).strip().startswith(("http://", "https://"))]
+                    if not selected:
+                        return await interaction.response.send_message("This command has no GIF links configured.", ephemeral=True)
+                    import random
+                    verb = str(_config.get("text", _name)).strip() or _name
+                    embed = discord.Embed(description=f"{interaction.user.mention} **{verb}** {target.mention}", colour=discord.Colour.blurple())
+                    embed.set_image(url=random.choice(selected))
+                    await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
+                command = app_commands.Command(name=name, description=str(config.get("description", f"{name} reaction"))[:100], callback=functools.partial(action, _config=config, _name=name))
+                bot.tree.add_command(command, guild=guild, override=True)
+        self.log("Custom GIF slash commands loaded from shared settings.")
+
     async def refresh_settings(self):
         while not self.bot.is_closed():
             await asyncio.sleep(10)
@@ -1491,7 +1524,16 @@ class ModeratorBot:
                     token_changed = fresh.get("token") != self.settings.get("token")
                     channels_changed = fresh.get("ticket_channels") != self.settings.get("ticket_channels")
                     birthday_channels_changed = fresh.get("birthdays") != self.settings.get("birthdays")
+                    old_custom = self.settings.get("custom_commands", {})
                     self.settings = fresh
+                    if fresh.get("custom_commands", {}) != old_custom:
+                        for _gid, _commands in old_custom.items():
+                            _guild = discord.Object(id=int(_gid))
+                            for _name in _commands:
+                                self.bot.tree.remove_command(str(_name), guild=_guild)
+                        self._register_custom_commands(self.bot)
+                        for _guild in self.bot.guilds:
+                            await self.bot.tree.sync(guild=discord.Object(id=_guild.id))
                     self.log("Settings synchronized from Cloudflare R2.")
                     if token_changed:
                         self.log("Discord token changed in Cloudflare R2; reconnecting with the new token.")
@@ -1508,6 +1550,7 @@ class ModeratorBot:
         intents = discord.Intents.default(); intents.message_content = True; intents.members = True
         bot = commands.Bot(command_prefix="!", intents=intents)
         self.bot = bot
+        self._register_custom_commands(bot)
 
         @bot.event
         async def on_ready():

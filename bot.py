@@ -1,4 +1,4 @@
-﻿"""Desktop GUI control panel. Settings, warnings, and logs are shared through encrypted Cloudflare R2."""
+"""Desktop GUI control panel. Settings, warnings, and logs are shared through encrypted Cloudflare R2."""
 import asyncio, calendar, io, os, queue, threading, uuid, webbrowser
 from datetime import date, datetime, timedelta, timezone
 from tzlocal import get_localzone_name
@@ -151,6 +151,7 @@ class App:
         self.scroll_regions = {}; self.settings_sync_inflight = False
         tabs = ttk.Notebook(root); tabs.pack(fill="both", expand=True, padx=14, pady=14); self.tabs = tabs
         self.connection_page, self.connection = self.make_scrollable_tab(tabs)
+        self.custom_commands_page, self.custom_commands_tab = self.make_scrollable_tab(tabs)
         self.chat_permissions_page, self.chat_permissions = self.make_scrollable_tab(tabs)
         self.link_permissions_page, self.link_permissions = self.make_scrollable_tab(tabs)
         self.drag_permissions_page, self.drag_permissions = self.make_scrollable_tab(tabs)
@@ -169,7 +170,7 @@ class App:
         self.log_page, self.log_tab = self.make_scrollable_tab(tabs)
         tabs.add(self.connection_page, text="Overview"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.activity_page, text="User Monitoring"); tabs.add(self.word_block_page, text="Word Block"); tabs.add(self.log_page, text="Live Logs")
         self.notif_entries, self.notif_edit_index = {}, None
-        self.connection_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui(); self.activity_ui(); self.word_block_ui()
+        self.connection_ui(); self.custom_commands_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui(); self.activity_ui(); self.word_block_ui()
         log_actions = tk.Frame(self.log_tab); log_actions.pack(pady=(8, 0))
         tk.Button(log_actions,text="Load shared Cloudflare R2 logs",command=self.load_logs).pack(side="left", padx=5)
         tk.Button(log_actions, text="Clear logs older than 30 days", command=self.clear_logs_older_than_30_days).pack(side="left", padx=5)
@@ -193,6 +194,71 @@ class App:
         self.invite_entry=tk.Entry(f,width=85,state="readonly"); self.invite_entry.pack()
         tk.Button(f,text="Open invite link and add bot to server",command=self.open_invite,width=36).pack(pady=6)
         tk.Label(f,text="Changes are securely shared with the Railway worker.",fg=self.MUTED).pack(pady=15)
+
+
+    def custom_commands_ui(self):
+        f = self.custom_commands_tab
+        tk.Label(f, text="Create server GIF slash commands", font=("Segoe UI", 14, "bold")).pack(pady=(14, 4))
+        tk.Label(f, text="Example: command name slap, text slap, then paste one direct GIF URL per line. Save updates Railway automatically.", wraplength=760, justify="center").pack(pady=(0, 12))
+        form = tk.Frame(f, bg=self.PANEL); form.pack(pady=5)
+        tk.Label(form, text="Server:").grid(row=0, column=0, sticky="e", padx=6, pady=6)
+        self.custom_server = ttk.Combobox(form, state="readonly", width=48); self.custom_server.grid(row=0, column=1, padx=6, pady=6)
+        tk.Label(form, text="Command name:").grid(row=1, column=0, sticky="e", padx=6, pady=6)
+        self.custom_name = tk.Entry(form, width=52); self.custom_name.grid(row=1, column=1, padx=6, pady=6)
+        tk.Label(form, text="Message word:").grid(row=2, column=0, sticky="e", padx=6, pady=6)
+        self.custom_text = tk.Entry(form, width=52); self.custom_text.grid(row=2, column=1, padx=6, pady=6)
+        tk.Label(form, text="GIF links (one per line):").grid(row=3, column=0, sticky="ne", padx=6, pady=6)
+        self.custom_gifs = tk.Text(form, width=52, height=9); self.custom_gifs.grid(row=3, column=1, padx=6, pady=6)
+        buttons = tk.Frame(f, bg=self.PANEL); buttons.pack(pady=8)
+        tk.Button(buttons, text="Save / update command", command=self.save_custom_command, width=25).pack(side="left", padx=5)
+        tk.Button(buttons, text="Delete command", command=self.delete_custom_command, width=18).pack(side="left", padx=5)
+        self.custom_list = tk.Listbox(f, width=72, height=8); self.custom_list.pack(pady=8)
+        tk.Label(f, text="Discord sync can take a few seconds after saving. Target is a native member picker: /slap � choose member!� Enter.", wraplength=760, justify="center", fg=self.MUTED).pack(pady=8)
+        self.custom_server.bind("<<ComboboxSelected>>", lambda e: self.refresh_custom_commands_ui())
+        self.custom_list.bind("<<ListboxSelect>>", lambda e: self.load_selected_custom_command())
+
+    def _custom_guild_id(self):
+        index = self.custom_server.current()
+        return str(self.guilds[index][0]) if 0 <= index < len(self.guilds) else ""
+
+    def refresh_custom_commands_ui(self):
+        self.custom_list.delete(0, tk.END)
+        commands = self.settings.get("custom_commands", {}).get(self._custom_guild_id(), {})
+        for name, config in sorted(commands.items()):
+            self.custom_list.insert(tk.END, f"/{name}  ({len(config.get('gifs', []))} GIF link(s))")
+
+    def load_selected_custom_command(self):
+        index = self.custom_list.curselection()
+        gid = self._custom_guild_id()
+        names = sorted(self.settings.get("custom_commands", {}).get(gid, {}))
+        if not index or index[0] >= len(names): return
+        config = self.settings["custom_commands"][gid][names[index[0]]]
+        self.custom_name.delete(0, tk.END); self.custom_name.insert(0, names[index[0]])
+        self.custom_text.delete(0, tk.END); self.custom_text.insert(0, config.get("text", names[index[0]]))
+        self.custom_gifs.delete("1.0", tk.END); self.custom_gifs.insert("1.0", "\n".join(config.get("gifs", [])))
+
+    def save_custom_command(self):
+        gid = self._custom_guild_id()
+        name = self.custom_name.get().strip().lower()
+        urls = [line.strip() for line in self.custom_gifs.get("1.0", tk.END).splitlines() if line.strip()]
+        if not gid: return messagebox.showwarning("Server missing", "Connect the GUI bot and select a server first.")
+        if not name or not __import__("re").fullmatch(r"[a-z0-9_-]{1,32}", name): return messagebox.showwarning("Invalid command", "Use only lowercase letters, numbers, hyphen, or underscore (max 32).")
+        if not urls or any(not url.startswith(("http://", "https://")) for url in urls): return messagebox.showwarning("GIF links missing", "Add at least one valid http(s) GIF URL per line.")
+        self.settings.setdefault("custom_commands", {}).setdefault(gid, {})[name] = {"text": self.custom_text.get().strip() or name, "gifs": list(dict.fromkeys(urls)), "description": f"{name} reaction"}
+        self.settings = self.store.save_settings(self.settings)
+        if self.runtime: self.runtime.settings = self.settings
+        self.refresh_custom_commands_ui()
+        messagebox.showinfo("Saved", f"/{name} saved. Railway synchronizes within 10 seconds.")
+
+    def delete_custom_command(self):
+        gid = self._custom_guild_id(); name = self.custom_name.get().strip().lower()
+        commands = self.settings.get("custom_commands", {}).get(gid, {})
+        if name not in commands: return messagebox.showwarning("Command missing", "Select or enter an existing command first.")
+        del commands[name]
+        self.settings = self.store.save_settings(self.settings)
+        if self.runtime: self.runtime.settings = self.settings
+        self.refresh_custom_commands_ui()
+        messagebox.showinfo("Deleted", f"/{name} removed. Railway will remove it on the next sync.")
 
     def chat_permissions_ui(self):
         f=self.chat_permissions; tk.Label(f,text="Server").pack(pady=(18,3))
@@ -1511,10 +1577,10 @@ class App:
                 kind,data=self.q.get_nowait()
                 if kind=="log": self.logs.config(state="normal"); self.logs.insert(tk.END,data+"\n"); self.logs.see(tk.END); self.logs.config(state="disabled")
                 elif kind=="guilds":
-                    self.guilds=data; values=[f"{name} ({gid})" for gid,name in data]; self.chat_server["values"]=values; self.link_server["values"]=values; self.drag_server["values"]=values; self.mod_guild["values"]=values; self.ticket_server["values"]=values; self.voice_server["values"]=values; self.greeting_server["values"]=values; self.level_server["values"]=values; self.counting_server["values"]=values; self.birthday_server["values"]=values; self.notif_server["values"]=values; self.movie_server["values"]=values; self.default_role_server["values"]=values; self.activity_guild["values"]=values; self.word_block_server["values"]=values
-                    if data: self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0); self.activity_guild.current(0)
+                    self.guilds=data; values=[f"{name} ({gid})" for gid,name in data]; self.custom_server["values"]=values; self.chat_server["values"]=values; self.link_server["values"]=values; self.drag_server["values"]=values; self.mod_guild["values"]=values; self.ticket_server["values"]=values; self.voice_server["values"]=values; self.greeting_server["values"]=values; self.level_server["values"]=values; self.counting_server["values"]=values; self.birthday_server["values"]=values; self.notif_server["values"]=values; self.movie_server["values"]=values; self.default_role_server["values"]=values; self.activity_guild["values"]=values; self.word_block_server["values"]=values
+                    if data: self.custom_server.current(0); self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0); self.activity_guild.current(0)
                     self.set_status("Connected")
-                elif kind=="guild": self.info[data["id"]]=data; self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_monitored_users(); self.refresh_word_blocks()
+                elif kind=="guild": self.info[data["id"]]=data; self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_monitored_users(); self.refresh_word_blocks()
                 elif kind=="ticket_moderator_verified":
                     user_id = data["id"]
                     if user_id in self.ticket_moderator_ids:
