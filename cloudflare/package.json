@@ -1,0 +1,13 @@
+﻿{
+  "name": "meta-bot-r2",
+  "private": true,
+  "scripts": {
+    "install:r2": "wrangler r2 bucket create meta-bot-media",
+    "r2:create": "wrangler r2 bucket create meta-bot-media",
+    "r2:list": "wrangler r2 bucket list",
+    "r2:info": "wrangler r2 bucket info meta-bot-media",
+    "d1:create": "wrangler d1 create meta-bot-db",
+    "d1:init": "wrangler d1 execute meta-bot-db --remote --file=schema.sql"
+  },
+  "devDependencies": { "wrangler": "^4.0.0" }
+}

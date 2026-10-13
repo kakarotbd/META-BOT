@@ -1,0 +1,10 @@
+name = "meta-bot-r2"
+compatibility_date = "2026-10-03"
+
+[[r2_buckets]]
+binding = "BOT_STATE"
+bucket_name = "meta-bot-media"
+[[d1_databases]]
+binding = "meta_bot_db"
+database_name = "meta-bot-db"
+database_id = "a531dd10-1c89-4502-90e9-780800173713"
