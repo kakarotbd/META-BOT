@@ -46,6 +46,10 @@ class App:
 
     def scroll_tab(self, event, direction=None):
         widget = event.widget
+        if event.state & 0x0001:
+            step = direction if direction is not None else (-1 if event.delta > 0 else 1)
+            self.navigate_tab(step)
+            return "break"
         if isinstance(widget, (ttk.Combobox, tk.Listbox, tk.Text, ttk.Treeview)):
             return None
         while widget is not None:
@@ -56,6 +60,15 @@ class App:
                 return "break"
             widget = getattr(widget, "master", None)
         return None
+
+    def navigate_tab(self, direction):
+        if not getattr(self, "tabs", None): return
+        count = len(self.tabs.tabs())
+        if count: self.tabs.select((self.tabs.index(self.tabs.select()) + direction) % count)
+
+    def scroll_tabs(self, event, direction=None):
+        self.navigate_tab(direction if direction is not None else (-1 if event.delta > 0 else 1))
+        return "break"
 
     def lock_combobox_wheel(self):
         def lock(widget):
@@ -97,8 +110,8 @@ class App:
         def choose(value):
             entry.config(state="normal"); entry.delete(0, tk.END); entry.insert(0, value.strftime("%Y-%m-%d")); popup.destroy()
             if on_change: on_change()
-        tk.Button(popup, text="‹", width=3, command=lambda: shift(-1)).grid(row=0, column=0, padx=(10, 2), pady=(10, 4))
-        tk.Button(popup, text="›", width=3, command=lambda: shift(1)).grid(row=0, column=6, padx=(2, 10), pady=(10, 4))
+        tk.Button(popup, text="<", width=3, command=lambda: shift(-1)).grid(row=0, column=0, padx=(10, 2), pady=(10, 4))
+        tk.Button(popup, text=">", width=3, command=lambda: shift(1)).grid(row=0, column=6, padx=(2, 10), pady=(10, 4))
         render()
 
     def open_clock_picker(self, hour_widget, minute_widget, ampm_widget):
@@ -134,7 +147,7 @@ class App:
     def set_status(self, value):
         online = str(value).lower() == "connected" or "connecting" in str(value).lower()
         self.status.config(text=f"Status: {value}")
-        self.header_status.config(text=f"● {str(value).upper()}", bg="#123b31" if online else "#2a1830", fg=self.SUCCESS if online else "#ff7b8a")
+        self.header_status.config(text=f"?-? {str(value).upper()}", bg="#123b31" if online else "#2a1830", fg=self.SUCCESS if online else "#ff7b8a")
     def animate_status(self):
         """Small live pulse for the header connection badge."""
         label = self.header_status
@@ -149,7 +162,10 @@ class App:
         self.configure_theme(root); root.title(f"{APP_CONFIG.bot_app_name} Control Center"); root.geometry("1240x820"); root.minsize(1080, 700); self.build_header(root)
         self.store = CloudflareD1Store(); self.settings = self.store.get_settings(); self.guilds, self.info, self.runtime, self.tickets, self.invite_url = [], {}, None, {}, ""
         self.scroll_regions = {}; self.settings_sync_inflight = False
-        tabs = ttk.Notebook(root); tabs.pack(fill="both", expand=True, padx=14, pady=14); self.tabs = tabs
+        shell = tk.Frame(root, bg=self.BG); shell.pack(fill="both", expand=True, padx=14, pady=14)
+        tk.Button(shell, text="<", width=3, command=lambda: self.navigate_tab(-1), relief="flat").pack(side="left", fill="y", padx=(0, 4))
+        tabs = ttk.Notebook(shell); tabs.pack(side="left", fill="both", expand=True); self.tabs = tabs
+        tk.Button(shell, text=">", width=3, command=lambda: self.navigate_tab(1), relief="flat").pack(side="right", fill="y", padx=(4, 0))
         self.connection_page, self.connection = self.make_scrollable_tab(tabs)
         self.custom_commands_page, self.custom_commands_tab = self.make_scrollable_tab(tabs)
         self.chat_permissions_page, self.chat_permissions = self.make_scrollable_tab(tabs)
@@ -168,14 +184,15 @@ class App:
         self.activity_page, self.activity_tab = self.make_scrollable_tab(tabs)
         self.word_block_page, self.word_block_tab = self.make_scrollable_tab(tabs)
         self.log_page, self.log_tab = self.make_scrollable_tab(tabs)
-        tabs.add(self.connection_page, text="Overview"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.activity_page, text="User Monitoring"); tabs.add(self.word_block_page, text="Word Block"); tabs.add(self.log_page, text="Live Logs")
+        tabs.add(self.connection_page, text="Overview"); tabs.add(self.custom_commands_page, text="GIF Commands"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.activity_page, text="User Monitoring"); tabs.add(self.word_block_page, text="Word Block"); tabs.add(self.log_page, text="Live Logs")
         self.notif_entries, self.notif_edit_index = {}, None
         self.connection_ui(); self.custom_commands_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui(); self.activity_ui(); self.word_block_ui()
         log_actions = tk.Frame(self.log_tab); log_actions.pack(pady=(8, 0))
         tk.Button(log_actions,text="Load shared Cloudflare R2 logs",command=self.load_logs).pack(side="left", padx=5)
         tk.Button(log_actions, text="Clear logs older than 30 days", command=self.clear_logs_older_than_30_days).pack(side="left", padx=5)
         self.logs = scrolledtext.ScrolledText(self.log_tab, state="disabled", height=30); self.logs.pack(fill="both", expand=True, padx=10, pady=10)
-        root.bind_all("<MouseWheel>", self.scroll_tab, add="+"); root.bind_all("<Button-4>", lambda event: self.scroll_tab(event, -1), add="+"); root.bind_all("<Button-5>", lambda event: self.scroll_tab(event, 1), add="+"); root.bind_all("<<ComboboxSelected>>", self.animate_selection, add="+"); root.after(0, self.lock_combobox_wheel)
+        tabs.bind("<MouseWheel>", self.scroll_tabs, add="+"); tabs.bind("<Button-4>", lambda event: self.scroll_tabs(event, -1), add="+"); tabs.bind("<Button-5>", lambda event: self.scroll_tabs(event, 1), add="+")
+        root.bind_all("<MouseWheel>", self.scroll_tab, add="+"); root.bind_all("<Shift-MouseWheel>", self.scroll_tabs, add="+"); root.bind_all("<Button-4>", lambda event: self.scroll_tab(event, -1), add="+"); root.bind_all("<Button-5>", lambda event: self.scroll_tab(event, 1), add="+"); root.bind_all("<<ComboboxSelected>>", self.animate_selection, add="+"); root.after(0, self.lock_combobox_wheel)
         root.after(200, self.poll); root.after(650, self.animate_status); root.after(5000, self.schedule_settings_sync)
         root.after(1000, self.load_tickets)
         root.after(15000, self.auto_refresh_tickets)
@@ -205,15 +222,13 @@ class App:
         self.custom_server = ttk.Combobox(form, state="readonly", width=48); self.custom_server.grid(row=0, column=1, padx=6, pady=6)
         tk.Label(form, text="Command name:").grid(row=1, column=0, sticky="e", padx=6, pady=6)
         self.custom_name = tk.Entry(form, width=52); self.custom_name.grid(row=1, column=1, padx=6, pady=6)
-        tk.Label(form, text="Message word:").grid(row=2, column=0, sticky="e", padx=6, pady=6)
-        self.custom_text = tk.Entry(form, width=52); self.custom_text.grid(row=2, column=1, padx=6, pady=6)
-        tk.Label(form, text="GIF links (one per line):").grid(row=3, column=0, sticky="ne", padx=6, pady=6)
-        self.custom_gifs = tk.Text(form, width=52, height=9); self.custom_gifs.grid(row=3, column=1, padx=6, pady=6)
+        tk.Label(form, text="GIF links (one per line):").grid(row=2, column=0, sticky="ne", padx=6, pady=6)
+        self.custom_gifs = tk.Text(form, width=52, height=9); self.custom_gifs.grid(row=2, column=1, padx=6, pady=6)
         buttons = tk.Frame(f, bg=self.PANEL); buttons.pack(pady=8)
         tk.Button(buttons, text="Save / update command", command=self.save_custom_command, width=25).pack(side="left", padx=5)
         tk.Button(buttons, text="Delete command", command=self.delete_custom_command, width=18).pack(side="left", padx=5)
         self.custom_list = tk.Listbox(f, width=72, height=8); self.custom_list.pack(pady=8)
-        tk.Label(f, text="Discord sync can take a few seconds after saving. Target is a native member picker: /slap � choose member!� Enter.", wraplength=760, justify="center", fg=self.MUTED).pack(pady=8)
+        tk.Label(f, text="Discord sync can take a few seconds after saving. Target is a native member picker: /slap ? choose member!? Enter.", wraplength=760, justify="center", fg=self.MUTED).pack(pady=8)
         self.custom_server.bind("<<ComboboxSelected>>", lambda e: self.refresh_custom_commands_ui())
         self.custom_list.bind("<<ListboxSelect>>", lambda e: self.load_selected_custom_command())
 
@@ -234,7 +249,6 @@ class App:
         if not index or index[0] >= len(names): return
         config = self.settings["custom_commands"][gid][names[index[0]]]
         self.custom_name.delete(0, tk.END); self.custom_name.insert(0, names[index[0]])
-        self.custom_text.delete(0, tk.END); self.custom_text.insert(0, config.get("text", names[index[0]]))
         self.custom_gifs.delete("1.0", tk.END); self.custom_gifs.insert("1.0", "\n".join(config.get("gifs", [])))
 
     def save_custom_command(self):
@@ -244,7 +258,7 @@ class App:
         if not gid: return messagebox.showwarning("Server missing", "Connect the GUI bot and select a server first.")
         if not name or not __import__("re").fullmatch(r"[a-z0-9_-]{1,32}", name): return messagebox.showwarning("Invalid command", "Use only lowercase letters, numbers, hyphen, or underscore (max 32).")
         if not urls or any(not url.startswith(("http://", "https://")) for url in urls): return messagebox.showwarning("GIF links missing", "Add at least one valid http(s) GIF URL per line.")
-        self.settings.setdefault("custom_commands", {}).setdefault(gid, {})[name] = {"text": self.custom_text.get().strip() or name, "gifs": list(dict.fromkeys(urls)), "description": f"{name} reaction"}
+        self.settings.setdefault("custom_commands", {}).setdefault(gid, {})[name] = {"text": name, "gifs": list(dict.fromkeys(urls)), "description": f"{name} reaction"}
         self.settings = self.store.save_settings(self.settings)
         if self.runtime: self.runtime.settings = self.settings
         self.refresh_custom_commands_ui()
@@ -297,7 +311,7 @@ class App:
         self.ticket_channel=ttk.Combobox(config,state="readonly",width=28); self.ticket_channel.grid(row=0,column=3,padx=4)
         tk.Button(config,text="Save ticket channel",command=self.save_ticket_channel).grid(row=0,column=4,padx=4)
         self.ticket_moderator_ids, self.ticket_moderator_details = [], {}
-        moderators = tk.LabelFrame(f, text="Ticket moderators — delivery order: 1 → 2 → 3 → 1")
+        moderators = tk.LabelFrame(f, text="Ticket moderators - delivery order: 1 -> 2 -> 3 -> 1")
         moderators.pack(fill="x", padx=10, pady=(2, 8))
         tk.Label(moderators, text="Member Discord ID:").grid(row=0, column=0, padx=6, pady=4)
         self.ticket_moderator_id = tk.Entry(moderators, width=24); self.ticket_moderator_id.grid(row=0, column=1, padx=6, pady=4)
@@ -305,7 +319,7 @@ class App:
         self.ticket_moderator_selected = tk.Listbox(moderators, height=6, width=70, exportselection=False); self.ticket_moderator_selected.grid(row=1, column=0, columnspan=3, padx=6, pady=3)
         tk.Button(moderators, text="Remove selected", command=self.remove_ticket_moderator).grid(row=2, column=0, padx=6, pady=(2, 6))
         tk.Button(moderators, text="Save moderator order", command=self.save_ticket_moderators).grid(row=2, column=1, padx=6, pady=(2, 6))
-        tk.Label(f,text="The bot posts a 🎫 Create Ticket button in that channel — users click it, fill in category and reason, then confirm. No /ticket typing needed.",wraplength=760,justify="left").pack(anchor="w",padx=10,pady=(0,6))
+        tk.Label(f,text="The bot posts a [Ticket] Create Ticket button in that channel - users click it, fill in category and reason, then confirm. No /ticket typing needed.",wraplength=760,justify="left").pack(anchor="w",padx=10,pady=(0,6))
         columns=("id","status","user","moderator","category","created")
         self.ticket_tree=ttk.Treeview(f,columns=columns,show="headings",height=12)
         for name,width in zip(columns,(90,85,160,160,160,220)):
@@ -353,7 +367,7 @@ class App:
 
     def word_block_ui(self):
         f=self.word_block_tab
-        tk.Label(f,text="Word Block • 5 strikes = permanent ban",font=("TkDefaultFont",12,"bold")).pack(pady=(18,5))
+        tk.Label(f,text="Word Block - 5 strikes = permanent ban",font=("TkDefaultFont",12,"bold")).pack(pady=(18,5))
         tk.Label(f,text="One word or phrase per line. A matched server message is deleted and logged; the fifth blocked message permanently bans that member. This shared Cloudflare R2 list is used by Railway and GUI.",wraplength=760,justify="center").pack(pady=(0,12))
         form=tk.Frame(f); form.pack()
         tk.Label(form,text="Server:").grid(row=0,column=0,padx=6,pady=6,sticky="e")
@@ -404,7 +418,7 @@ class App:
     def counting_ui(self):
         f=self.counting_tab
         tk.Label(f,text="Counting Channel",font=("TkDefaultFont",12,"bold")).pack(pady=(20,6))
-        tk.Label(f,text="Select one channel. Members must send 1, 2, 3… in order. Correct messages get ✅. Wrong entries do not change the saved count; only correct entries get a ✅.",wraplength=760,justify="center").pack(pady=(0,14))
+        tk.Label(f,text="Select one channel. Members must send 1, 2, 3... in order. Correct messages get [ok] Wrong entries do not change the saved count; only correct entries get a [ok]",wraplength=760,justify="center").pack(pady=(0,14))
         form=tk.Frame(f); form.pack()
         tk.Label(form,text="Server:").grid(row=0,column=0,padx=6,pady=7,sticky="e")
         self.counting_server=ttk.Combobox(form,state="readonly",width=48); self.counting_server.grid(row=0,column=1,padx=6,pady=7)
@@ -417,7 +431,7 @@ class App:
     def birthday_ui(self):
         f=self.birthday_tab; self.birthday_image_path=None
         tk.Label(f,text="Birthdays",font=("TkDefaultFont", 12, "bold")).pack(pady=(16,5))
-        tk.Label(f,text="The bot posts an 🎂 Add Birthday button in the channel below. Members click it, enter day/month/year in a popup, and get a private confirmation. Clicking again later warns them before changing the saved date. On the day itself, the bot posts \"Happy Birthday @member\" with the wish text and image below.",wraplength=720,justify="center").pack(pady=(0,12))
+        tk.Label(f,text="The bot posts an [Birthday] Add Birthday button in the channel below. Members click it, enter day/month/year in a popup, and get a private confirmation. Clicking again later warns them before changing the saved date. On the day itself, the bot posts \"Happy Birthday @member\" with the wish text and image below.",wraplength=720,justify="center").pack(pady=(0,12))
         form=tk.Frame(f); form.pack(fill="x",padx=25)
         tk.Label(form,text="Server:").grid(row=0,column=0,padx=5,pady=6,sticky="e")
         self.birthday_server=ttk.Combobox(form,state="readonly",width=48); self.birthday_server.grid(row=0,column=1,columnspan=2,padx=5,pady=6,sticky="w")
@@ -455,9 +469,9 @@ class App:
         for widget,value in ((self.level_xp,15),(self.level_cooldown,60),(self.level_base,100),(self.level_multiplier,1.5)):
             widget.delete(0,tk.END); widget.insert(0,str(value))
         tk.Button(f,text="Save Leveling Settings",command=self.save_leveling,width=32).pack(pady=(8,4))
-        tk.Label(f,text="Formula: each level costs base × current-level^multiplier. A small message-length bonus (up to +10 XP) rewards real conversation; messages below 3 characters and cooldown spam earn nothing.",wraplength=700,justify="center").pack(pady=14)
+        tk.Label(f,text="Formula: each level costs base x current-level^multiplier. A small message-length bonus (up to +10 XP) rewards real conversation; messages below 3 characters and cooldown spam earn nothing.",wraplength=700,justify="center").pack(pady=14)
         tk.Label(f,text="Voice Call XP",font=("TkDefaultFont",12,"bold")).pack(pady=(4,6))
-        tk.Label(f,text="Members on a voice call earn XP on their own timer. Voice awards are intentionally 3× slower than this interval, so simply idling in VC cannot level up quickly.",wraplength=700,justify="center").pack(pady=(0,10))
+        tk.Label(f,text="Members on a voice call earn XP on their own timer. Voice awards are intentionally 3x slower than this interval, so simply idling in VC cannot level up quickly.",wraplength=700,justify="center").pack(pady=(0,10))
         voice_form=tk.Frame(f); voice_form.pack()
         tk.Label(voice_form,text="XP per interval:").grid(row=0,column=0,padx=6,pady=7,sticky="e")
         self.voice_level_xp=tk.Spinbox(voice_form,from_=1,to=100,width=8); self.voice_level_xp.grid(row=0,column=1,sticky="w",padx=6)
@@ -589,7 +603,7 @@ class App:
         self.notif_date_entry.grid(row=4, column=1, padx=5, pady=5, sticky="w")
         tk.Button(right, text="Calendar", command=lambda: self.open_calendar_picker(self.notif_date_entry, self.refresh_notif_schedule_state)).grid(row=4, column=2, padx=4, pady=5, sticky="w")
         self.notif_date_entry.bind("<KeyRelease>", lambda event: self.refresh_notif_schedule_state())
-        tk.Label(right, text="A day, Everyday, and a specific date can't be combined — pick one.", wraplength=380, justify="left", fg="#555").grid(row=5, column=1, columnspan=3, padx=5, sticky="w")
+        tk.Label(right, text="A day, Everyday, and a specific date cannot be combined - pick one.", wraplength=380, justify="left", fg="#555").grid(row=5, column=1, columnspan=3, padx=5, sticky="w")
 
         tk.Label(right, text="Custom message (optional):").grid(row=6, column=0, padx=5, pady=5, sticky="e")
         self.notif_message = tk.Entry(right, width=38); self.notif_message.grid(row=6, column=1, columnspan=3, padx=5, pady=5, sticky="w")
@@ -609,7 +623,7 @@ class App:
 
     def refresh_notif_schedule_state(self):
         """Enforce mutual exclusivity: a specific date OR Everyday OR one/more
-        weekdays — never a combination. Called after every checkbox click and
+        weekdays - never a combination. Called after every checkbox click and
         every keystroke in the date box."""
         has_date = bool(self.notif_date_entry.get().strip())
         if has_date:
@@ -648,7 +662,7 @@ class App:
         if entry_date: schedule = entry_date
         elif "everyday" in days: schedule = "Everyday"
         else: schedule = "/".join(day.title() for day in days) or "Everyday"
-        return f"#{channel_name} • {', '.join(role_names) or '?'} • {schedule} • {entry.get('time_12h', entry.get('time', '?'))}{state}"
+        return f"#{channel_name} - {', '.join(role_names) or '?'} - {schedule} - {entry.get('time_12h', entry.get('time', '?'))}{state}"
 
     def refresh_notif_ui(self):
         guild_id = self.current_notif_guild_id()
@@ -840,7 +854,7 @@ class App:
         tk.Label(top, text="Server:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
         self.default_role_server = ttk.Combobox(top, state="readonly", width=42); self.default_role_server.grid(row=0, column=1, padx=5, pady=5, sticky="w")
         self.default_role_server.bind("<<ComboboxSelected>>", lambda event: self.refresh_default_role_ui())
-        tk.Label(f, text="Role(s) to auto-assign — select one or more:").pack(pady=(6, 3))
+        tk.Label(f, text="Role(s) to auto-assign - select one or more:").pack(pady=(6, 3))
         self.default_role_options = []
         self.default_role_list = tk.Listbox(f, selectmode="multiple", width=50, height=12, exportselection=False)
         self.default_role_list.pack(pady=(0, 6)); self.default_role_list.bind("<<ListboxSelect>>", lambda event: self.update_role_summary(self.default_role_list, self.default_role_summary))
@@ -908,7 +922,7 @@ class App:
         if not self.runtime or not self.runtime.loop:
             return messagebox.showwarning("GUI bot offline", "Connect the GUI bot first (Connection tab) so Discord can update existing members.")
         self.default_role_progress["value"] = 0
-        self.default_role_progress_label.config(text="Starting…")
+        self.default_role_progress_label.config(text="Starting...")
         def progress(done, total):
             percent = int(done * 100 / total) if total else 100
             self.q.put(("default_role_progress", (percent, done, total)))
@@ -1049,7 +1063,7 @@ class App:
         self.ticket_moderator_selected.delete(0, tk.END)
         for number, user_id in enumerate(self.ticket_moderator_ids, 1):
             member = details.get(user_id, {"display_name": "Verified user", "name": user_id})
-            self.ticket_moderator_selected.insert(tk.END, f"{number}. {member['display_name']} (@{member['name']}) • {user_id}")
+            self.ticket_moderator_selected.insert(tk.END, f"{number}. {member['display_name']} (@{member['name']}) - {user_id}")
 
     def refresh_ticket_moderators(self):
         index = self.ticket_server.current()
@@ -1096,7 +1110,7 @@ class App:
         i=self.voice_server.current()
         if i<0:return
         guild_id=self.guilds[i][0]; channels=self.info.get(guild_id,{}).get("voice_channels",[])
-        self.voice_channel["values"]=[f"🔊 {channel['name']} ({channel['id']})" for channel in channels]
+        self.voice_channel["values"]=[f"[Voice] {channel['name']} ({channel['id']})" for channel in channels]
         saved=str(self.settings.get("temp_voice_lobbies",{}).get(str(guild_id),{}).get("channel_id",""))
         for index,channel in enumerate(channels):
             if channel["id"]==saved: self.voice_channel.current(index); break
@@ -1135,7 +1149,7 @@ class App:
             if not (1<=xp<=100 and 5<=cooldown<=3600 and 10<=base<=10000 and 1.0<=multiplier<=3.0): raise ValueError
             if not (1<=voice_xp<=100 and 30<=voice_interval<=1800): raise ValueError
         except ValueError:
-            return messagebox.showwarning("Invalid leveling values","XP must be 1–100, cooldown 5–3600, base 10–10000, multiplier 1.0–3.0, voice XP 1–100, and voice interval 30–1800.")
+            return messagebox.showwarning("Invalid leveling values","XP must be 1-100, cooldown 5-3600, base 10-10000, multiplier 1.0-3.0, voice XP 1-100, and voice interval 30-1800.")
         guild_id=str(self.guilds[server_index][0]); channels=self.info.get(self.guilds[server_index][0],{}).get("text_channels",[])
         self.settings.setdefault("leveling",{})[guild_id]={
             "enabled":self.level_enabled.get(),"channel_id":channels[channel_index]["id"],
@@ -1408,7 +1422,7 @@ class App:
         selected=self.ticket_tree.selection()
         if not selected or selected[0] not in self.tickets:return
         ticket=self.tickets[selected[0]]
-        category=ticket["category"] + (f" — {ticket['other_category']}" if ticket.get("other_category") else "")
+        category=ticket["category"] + (f" - {ticket['other_category']}" if ticket.get("other_category") else "")
         detail=(f"Ticket ID: #{ticket['ticket_id']}\nStatus: {ticket['status']}\nCreated: {ticket.get('created_at','-')}\n"
                 f"User: {ticket['username']} (Discord ID: {ticket['user_id']})\n"
                 f"Category: {category}\n\nProblem:\n{ticket['problem']}")
@@ -1473,14 +1487,14 @@ class App:
         self.monitored_users.delete(0, tk.END)
         for user_id in users:
             member = next((m for m in self.info.get(int(guild_id), {}).get("members", []) if m["id"] == str(user_id)), None)
-            label = f"{user_id} — {member['display_name']}" if member else str(user_id)
+            label = f"{user_id} - {member['display_name']}" if member else str(user_id)
             self.monitored_users.insert(tk.END, label)
 
     def select_monitored_user(self):
         selected = self.monitored_users.curselection()
         if not selected:
             return
-        user_id = self.monitored_users.get(selected[0]).split(" — ", 1)[0]
+        user_id = self.monitored_users.get(selected[0]).split(" - ", 1)[0]
         self.activity_member_id.delete(0, tk.END); self.activity_member_id.insert(0, user_id)
         self.find_activity_member(); self.load_member_activity()
 
@@ -1602,7 +1616,7 @@ class App:
                         # Keep every settings tab aligned with Cloudflare R2, not only
                         # permission and Auto Role tabs. This is the same shared
                         # document Railway reads on its 10-second refresh cycle.
-                        self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_monitored_users(); self.refresh_word_blocks()
+                        self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_monitored_users(); self.refresh_word_blocks()
                         self.header_subtitle.config(text="Settings synchronized from Cloudflare R2",fg=self.SUCCESS)
                 elif kind=="settings_sync_error": self.settings_sync_inflight=False
                 elif kind=="logs_cleared":

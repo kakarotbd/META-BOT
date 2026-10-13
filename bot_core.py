@@ -1491,6 +1491,22 @@ class ModeratorBot:
     def _custom_command_names(self):
         return {str(name) for commands in self.settings.get("custom_commands", {}).values() for name in commands}
 
+    def _next_custom_gif(self, guild_id, command_name, urls):
+        """Return each configured GIF once per shuffled cycle, then reshuffle."""
+        import random
+        cycles = getattr(self, "_custom_gif_cycles", None)
+        if cycles is None:
+            cycles = self._custom_gif_cycles = {}
+        key = (str(guild_id), str(command_name))
+        source = tuple(urls)
+        state = cycles.get(key)
+        if not state or state["source"] != source or not state["remaining"]:
+            remaining = list(source)
+            random.shuffle(remaining)
+            state = {"source": source, "remaining": remaining}
+            cycles[key] = state
+        return state["remaining"].pop()
+
     def _register_custom_commands(self, bot):
         """Register GUI-defined guild slash commands with Discord's native member picker."""
         for guild_id, commands_config in self.settings.get("custom_commands", {}).items():
@@ -1506,10 +1522,9 @@ class ModeratorBot:
                     selected = [str(url).strip() for url in _config.get("gifs", []) if str(url).strip().startswith(("http://", "https://"))]
                     if not selected:
                         return await interaction.response.send_message("This command has no GIF links configured.", ephemeral=True)
-                    import random
-                    verb = str(_config.get("text", _name)).strip() or _name
+                    verb = _name
                     embed = discord.Embed(description=f"{interaction.user.mention} **{verb}** {target.mention}", colour=discord.Colour.blurple())
-                    embed.set_image(url=random.choice(selected))
+                    embed.set_image(url=self._next_custom_gif(interaction.guild.id, _name, selected))
                     await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
                 command = app_commands.Command(name=name, description=str(config.get("description", f"{name} reaction"))[:100], callback=functools.partial(action, _config=config, _name=name))
                 bot.tree.add_command(command, guild=guild, override=True)
