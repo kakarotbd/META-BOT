@@ -1516,17 +1516,20 @@ class ModeratorBot:
                 urls = [str(url).strip() for url in config.get("gifs", []) if str(url).strip().startswith(("http://", "https://"))]
                 if not self._valid_custom_command_name(name) or not urls:
                     continue
-                async def action(interaction: discord.Interaction, target: discord.Member, _config, _name):
-                    if target.bot:
-                        return await interaction.response.send_message("Please choose a real server member.", ephemeral=True)
-                    selected = [str(url).strip() for url in _config.get("gifs", []) if str(url).strip().startswith(("http://", "https://"))]
-                    if not selected:
-                        return await interaction.response.send_message("This command has no GIF links configured.", ephemeral=True)
-                    verb = _name
-                    embed = discord.Embed(description=f"{interaction.user.mention} **{verb}** {target.mention}", colour=discord.Colour.blurple())
-                    embed.set_image(url=self._next_custom_gif(interaction.guild.id, _name, selected))
-                    await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
-                command = app_commands.Command(name=name, description=str(config.get("description", f"{name} reaction"))[:100], callback=functools.partial(action, _config=config, _name=name))
+                def make_callback(bound_config, bound_name):
+                    async def callback(interaction: discord.Interaction, target: discord.Member):
+                        if target.bot:
+                            return await interaction.response.send_message("Please choose a real server member.", ephemeral=True)
+                        selected = [str(url).strip() for url in bound_config.get("gifs", []) if str(url).strip().startswith(("http://", "https://"))]
+                        if not selected:
+                            return await interaction.response.send_message("This command has no GIF links configured.", ephemeral=True)
+                        verb = bound_name
+                        embed = discord.Embed(description=f"{interaction.user.mention} **{verb}** {target.mention}", colour=discord.Colour.blurple())
+                        embed.set_image(url=self._next_custom_gif(interaction.guild.id, bound_name, selected))
+                        await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
+                    return callback
+
+                command = app_commands.Command(name=name, description=str(config.get("description", f"{name} reaction"))[:100], callback=make_callback(config, name))
                 bot.tree.add_command(command, guild=guild, override=True)
         self.log("Custom GIF slash commands loaded from shared settings.")
 
