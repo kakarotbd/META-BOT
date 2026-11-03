@@ -80,7 +80,7 @@ In the GUI's **Leveling** tab, choose a server and the text channel where level-
 
 XP lives in encrypted Cloudflare R2 and is awarded by a transaction, separately keyed per activity source (text vs. voice). This means the desktop GUI and Railway worker use the same XP, cooldown, and level record for both sources; even if they briefly overlap, one cooldown window for one source can only be claimed once, so leveling stays 100% consistent between the GUI and Railway. Configure with the GUI, then keep one gateway worker (normally Railway) online — the voice XP check runs automatically as part of that same worker, every 15 seconds, with no extra setup.
 
-Members can use **`/leaderboard`** in a server to get a PNG card of the top 10 by lifetime total XP. It includes each member's level and Discord avatar, plus the server name and icon. GUI and Railway read the same encrypted XP records, so the command uses the shared leveling data.
+Members can use **`/leaderboard`** in a server to get a 1920×1840 high-resolution PNG card of the top 10 by lifetime total XP. It includes each member's level and Discord avatar, plus the server name and icon. GUI and Railway read the same encrypted XP records, so the command uses the shared leveling data.
 
 ## Role notifications (scheduled role pings)
 

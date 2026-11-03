@@ -53,7 +53,38 @@ def _leaderboard_font(size, bold=False):
             return ImageFont.truetype(path, size)
         except OSError:
             continue
-    return ImageFont.load_default()
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+class _ScaledImageDraw:
+    """Draw using logical coordinates while rasterizing at a higher resolution."""
+    def __init__(self, draw, scale):
+        self.draw, self.scale = draw, scale
+
+    def _box(self, box):
+        return tuple(round(value*self.scale) for value in box)
+
+    def rounded_rectangle(self, box, **kwargs):
+        kwargs["radius"] = round(kwargs.get("radius", 0)*self.scale)
+        kwargs["width"] = round(kwargs.get("width", 1)*self.scale)
+        return self.draw.rounded_rectangle(self._box(box), **kwargs)
+
+    def ellipse(self, box, **kwargs):
+        kwargs["width"] = round(kwargs.get("width", 1)*self.scale)
+        return self.draw.ellipse(self._box(box), **kwargs)
+
+    def _font(self, font):
+        return font
+
+    def text(self, xy, text, **kwargs):
+        return self.draw.text(self._box(xy), text, font=self._font(kwargs.pop("font", None)), **kwargs)
+
+    def textbbox(self, xy, text, **kwargs):
+        box = self.draw.textbbox(self._box(xy), text, font=self._font(kwargs.pop("font", None)), **kwargs)
+        return tuple(round(value/self.scale) for value in box)
 
 
 def _fetch_leaderboard_image(url):
@@ -73,9 +104,10 @@ def _fetch_leaderboard_image(url):
 
 def render_leaderboard_png(guild_name, icon_url, entries):
     """Render the top ten lifetime-XP users into a polished Discord PNG card."""
+    scale = 2
     width, height = 960, 920
-    image = Image.new("RGBA", (width, height), "#090e19")
-    draw = ImageDraw.Draw(image)
+    image = Image.new("RGBA", (width*scale, height*scale), "#090e19")
+    draw = _ScaledImageDraw(ImageDraw.Draw(image), scale)
     draw.rounded_rectangle((22, 22, width-22, height-22), radius=26, fill="#101827", outline="#263650", width=2)
     draw.rounded_rectangle((42, 42, width-42, 210), radius=20, fill="#17243a")
     draw.rounded_rectangle((62, 62, 182, 182), radius=16, fill="#273650", outline="#7185a8", width=2)
@@ -86,12 +118,12 @@ def render_leaderboard_png(guild_name, icon_url, entries):
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         fetched = list(pool.map(_fetch_leaderboard_image, images))
     if fetched and fetched[0]:
-        icon = ImageOps.fit(fetched[0], (112, 112), centering=(0.5, 0.5))
-        mask = Image.new("L", (112,112), 0); ImageDraw.Draw(mask).rounded_rectangle((0,0,111,111), radius=13, fill=255)
-        image.paste(icon, (66,66), mask)
-    body_font = _leaderboard_font(19)
-    small_font = _leaderboard_font(15)
-    bold_font = _leaderboard_font(20, True)
+        icon = ImageOps.fit(fetched[0], (112*scale, 112*scale), centering=(0.5, 0.5))
+        mask = Image.new("L", (112*scale,112*scale), 0); ImageDraw.Draw(mask).rounded_rectangle((0,0,111*scale,111*scale), radius=13*scale, fill=255)
+        image.paste(icon, (66*scale,66*scale), mask)
+    body_font = _leaderboard_font(19*scale)
+    small_font = _leaderboard_font(15*scale)
+    bold_font = _leaderboard_font(20*scale, True)
     rank_colors = ["#f3c969", "#c8d3e8", "#d89468"]
     row_start, row_height = 226, 62
     for index, entry in enumerate(entries[:10]):
@@ -105,9 +137,9 @@ def render_leaderboard_png(guild_name, icon_url, entries):
         draw.text((79-(rank_box[2]-rank_box[0])/2,y+15),rank_text,font=bold_font,fill=rank_color)
         avatar = fetched[index+1] if index+1 < len(fetched) else None
         if avatar:
-            avatar = ImageOps.fit(avatar,(40,40),centering=(0.5,0.5))
-            mask = Image.new("L",(40,40),0); ImageDraw.Draw(mask).ellipse((0,0,39,39),fill=255)
-            image.paste(avatar,(115,y+7),mask)
+            avatar = ImageOps.fit(avatar,(40*scale,40*scale),centering=(0.5,0.5))
+            mask = Image.new("L",(40*scale,40*scale),0); ImageDraw.Draw(mask).ellipse((0,0,39*scale,39*scale),fill=255)
+            image.paste(avatar,(115*scale,(y+7)*scale),mask)
         else:
             draw.ellipse((115,y+7,155,y+47),fill="#344866")
             initials = (entry.get("name") or "?").strip()[:1].upper()
