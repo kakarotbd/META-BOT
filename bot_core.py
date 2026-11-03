@@ -718,9 +718,8 @@ HELP_PAGES = [
         ("Discipline", "Admins can set a daily Bangladesh-time voice restriction for a specific member. During that time, the bot disconnects them if they join voice; after the end time, they can join again."),
         ("Announcements", "Movie posts and role notifications are sent automatically to their configured channels and schedules. Some schedules repeat by day or weekday; one-time movie announcements fire once."),
     ]),
-    ("SAFETY & MEMBER ACTIVITY", "The bot applies the server's saved moderation rules and provides limited activity history.", [
+    ("SAFETY & MODERATION", "The bot applies the server's saved moderation rules and protects configured server spaces.", [
         ("Link and word rules", "Only configured roles may post links where link filtering is enabled. Configured blocked words are removed and logged; repeated blocked-word violations can lead to an automatic permanent ban."),
-        ("Member activity", "Admins can save a member as a monitoring target and review up to 24 hours of available server messages, deleted messages, joins/leaves, and voice join/leave times. The bot does not capture VC audio or private DM content."),
         ("Moderation controls", "Server admins manage warning thresholds, timeout settings, protected accounts, and manual moderation actions through the desktop control panel."),
     ]),
     ("ADMIN SETUP & SYNC", "The desktop panel configures features; Railway keeps the shared bot online.", [
@@ -802,21 +801,6 @@ class ModeratorBot:
         # GUI inventory should be refreshed each time, but background loops must
         # only exist once or a reconnect would create duplicate workers.
         self.background_tasks_started = False
-
-    async def track_member_voice_activity(self, member, before_channel, after_channel):
-        """Record voice joins, moves, leaves, and time spent in this server only."""
-        if member.bot or before_channel == after_channel:
-            return
-        if before_channel:
-            session = await asyncio.to_thread(self.store.end_member_voice_session, member.guild.id, member.id)
-            if session:
-                started = datetime.fromisoformat(session["started_at"])
-                duration = max(0, round((datetime.now(timezone.utc) - started).total_seconds()))
-                await asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "voice_left", {"channel": session.get("channel_name", before_channel.name), "duration_seconds": duration})
-        if after_channel:
-            started = await asyncio.to_thread(self.store.start_member_voice_session, member.guild.id, member.id, str(member), after_channel.name)
-            if started:
-                await asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "voice_joined", {"channel": after_channel.name})
 
     def discipline_restricted(self, guild_id, user_id, now=None):
         """Whether a member is inside their recurring Bangladesh-time voice restriction."""
@@ -984,11 +968,6 @@ class ModeratorBot:
             if violation.get("duplicate"):
                 return True
             strikes = int(violation["count"])
-            await asyncio.to_thread(
-                self.store.record_member_activity, message.guild.id, message.author.id, str(message.author),
-                "word_spam", {"word": matched, "strikes": strikes, "channel": getattr(message.channel, "name", "unknown"), "content": message.content[:1000]},
-                f"word_spam_{message.id}",
-            )
         except Exception as exc:
             self.log(f"Could not record blocked-word violation in {message.guild.name}: {exc}")
             return False
@@ -1004,10 +983,6 @@ class ModeratorBot:
             return True
         try:
             await message.author.ban(reason=f"Permanent ban: 5 blocked-word violations (latest: {matched})", delete_message_seconds=0)
-            await asyncio.to_thread(
-                self.store.record_member_activity, message.guild.id, message.author.id, str(message.author),
-                "word_spam_banned", {"word": matched, "strikes": strikes}, f"word_spam_banned_{message.id}",
-            )
             self.log(f"Permanently banned {message.author} in {message.guild.name} after {strikes} blocked-word violations.")
         except (discord.Forbidden, discord.HTTPException) as exc:
             self.log(f"Could not ban blocked-word spammer {message.author} in {message.guild.name}: {exc}")
@@ -1967,11 +1942,6 @@ class ModeratorBot:
             self.event("guild", self.guild_info(guild))
         @bot.event
         async def on_voice_state_update(member, before, after):
-            # Keep R2 activity logging off the critical temporary-room path.
-            # Capture channel objects before awaiting enforcement: Discipline may
-            # disconnect the member immediately, while the activity task is queued.
-            before_channel, after_channel = before.channel, after.channel
-            asyncio.create_task(self.track_member_voice_activity(member, before_channel, after_channel))
             if after.channel:
                 if await self.enforce_discipline(member):
                     return
@@ -1983,24 +1953,10 @@ class ModeratorBot:
             await self.send_member_greeting(member, "welcome")
             if member.bot:
                 return
-            asyncio.create_task(asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "member_joined", {}))
             await self.apply_default_roles(member)
         @bot.event
         async def on_member_remove(member):
-            await asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "member_left", {})
             await self.send_member_greeting(member, "goodbye")
-
-        @bot.event
-        async def on_message_delete(message):
-            # Cached messages retain their text, so manual and bot deletions remain
-            # visible to the server's saved monitoring targets.
-            if message.author.bot or not message.guild:
-                return
-            await asyncio.to_thread(
-                self.store.record_member_activity, message.guild.id, message.author.id, str(message.author),
-                "message_deleted", {"channel": getattr(message.channel, "name", "unknown"), "content": message.content[:1000]},
-                f"message_deleted_{message.id}",
-            )
 
         @bot.event
         async def on_message(message):
@@ -2036,7 +1992,6 @@ class ModeratorBot:
                             self.log(f"Staff reply received on ticket #{ticket['ticket_id']}; unanswered-ticket reminders stopped.")
                     except Exception as exc:
                         self.log(f"Could not mark staff reply on ticket #{ticket['ticket_id']}: {exc}")
-            asyncio.create_task(asyncio.to_thread(self.store.record_member_activity, message.guild.id, message.author.id, str(message.author), "message", {"channel": getattr(message.channel, "name", "unknown"), "content": message.content[:1000]}, f"message_{message.id}"))
             if await self.handle_word_block(message):
                 return
             # Discord invites are always blocked. Discord does not expose an invite's
@@ -2044,7 +1999,6 @@ class ModeratorBot:
             if DISCORD_INVITE_PATTERN.search(message.content):
                 try:
                     await message.delete()
-                    await asyncio.to_thread(self.store.record_member_activity, message.guild.id, message.author.id, str(message.author), "discord_invite_blocked", {"channel": getattr(message.channel, "name", "unknown"), "content": message.content[:1000]}, f"invite_{message.id}")
                 except (discord.Forbidden, discord.NotFound) as exc:
                     self.log(f"Cannot delete Discord invite: {exc}")
                 return
@@ -2298,7 +2252,6 @@ class ModeratorBot:
         if action == "kick": await member.kick(reason=reason or "GUI moderation action")
         elif action == "ban": await member.ban(reason=reason or "GUI moderation action", delete_message_seconds=0)
         else: raise RuntimeError("Unsupported moderation action.")
-        await asyncio.to_thread(self.store.record_member_activity, guild_id, user_id, str(member), f"member_{action}ed", {"reason": reason or "GUI moderation action"})
         self.log(f"{action.title()}ed {member} from {guild.name}.")
 
 class TempVoiceInviteModal(discord.ui.Modal, title="Invite member to temporary VC"):

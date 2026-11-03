@@ -181,13 +181,12 @@ class App:
         self.movie_page, self.movie_tab = self.make_scrollable_tab(tabs)
         self.default_roles_page, self.default_roles_tab = self.make_scrollable_tab(tabs)
         self.moderation_page, self.moderation_tab = self.make_scrollable_tab(tabs)
-        self.activity_page, self.activity_tab = self.make_scrollable_tab(tabs)
         self.word_block_page, self.word_block_tab = self.make_scrollable_tab(tabs)
         self.discipline_page, self.discipline_tab = self.make_scrollable_tab(tabs)
         self.log_page, self.log_tab = self.make_scrollable_tab(tabs)
-        tabs.add(self.connection_page, text="Overview"); tabs.add(self.custom_commands_page, text="GIF Commands"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.activity_page, text="User Monitoring"); tabs.add(self.word_block_page, text="Word Block"); tabs.add(self.discipline_page, text="Discipline"); tabs.add(self.log_page, text="Live Logs")
+        tabs.add(self.connection_page, text="Overview"); tabs.add(self.custom_commands_page, text="GIF Commands"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.word_block_page, text="Word Block"); tabs.add(self.discipline_page, text="Discipline"); tabs.add(self.log_page, text="Live Logs")
         self.notif_entries, self.notif_edit_index = {}, None
-        self.connection_ui(); self.custom_commands_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui(); self.activity_ui(); self.word_block_ui(); self.discipline_ui()
+        self.connection_ui(); self.custom_commands_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui(); self.word_block_ui(); self.discipline_ui()
         log_actions = tk.Frame(self.log_tab); log_actions.pack(pady=(8, 0))
         tk.Button(log_actions,text="Load shared Cloudflare R2 logs",command=self.load_logs).pack(side="left", padx=5)
         tk.Button(log_actions, text="Clear logs older than 30 days", command=self.clear_logs_older_than_30_days).pack(side="left", padx=5)
@@ -346,25 +345,6 @@ class App:
         row=tk.Frame(f); row.pack(pady=18)
         tk.Button(row,text="Kick member",command=lambda:self.moderate("kick"),width=20).grid(row=0,column=0,padx=8)
         tk.Button(row,text="Ban member",command=lambda:self.moderate("ban"),width=20).grid(row=0,column=1,padx=8)
-
-    def activity_ui(self):
-        f=self.activity_tab
-        tk.Label(f,text="User Monitoring (24 hours)",font=("TkDefaultFont",12,"bold")).pack(pady=(18,5))
-        tk.Label(f,text="Save a member ID, then click that saved target to view their last 24 hours of server messages, deleted messages, voice joins/leaves and duration. Spam and automatic-ban records are red. Discord does not provide voice-call audio or DM content.",wraplength=760,justify="center").pack(pady=(0,12))
-        form=tk.Frame(f); form.pack()
-        tk.Label(form,text="Server:").grid(row=0,column=0,padx=6,pady=6,sticky="e")
-        self.activity_guild=ttk.Combobox(form,state="readonly",width=52); self.activity_guild.grid(row=0,column=1,padx=6,pady=6)
-        self.activity_guild.bind("<<ComboboxSelected>>",lambda event:self.refresh_monitored_users())
-        tk.Label(form,text="Member ID:").grid(row=1,column=0,padx=6,pady=6,sticky="e")
-        self.activity_member_id=tk.Entry(form,width=54); self.activity_member_id.grid(row=1,column=1,padx=6,pady=6)
-        self.activity_member_name=tk.Label(f,text="Enter an ID to show the member name.",fg=self.MUTED); self.activity_member_name.pack(pady=(3,6))
-        row=tk.Frame(f); row.pack(pady=(3,8))
-        tk.Button(row,text="Save monitoring target",command=self.save_monitored_user,width=22).grid(row=0,column=0,padx=5)
-        tk.Button(row,text="Remove target",command=self.remove_monitored_user,width=18).grid(row=0,column=1,padx=5)
-        tk.Button(row,text="Load selected activity",command=self.load_member_activity,width=22).grid(row=0,column=2,padx=5)
-        self.monitored_users=tk.Listbox(f,height=5,exportselection=False,width=78); self.monitored_users.pack(padx=12,pady=(0,6),fill="x")
-        self.monitored_users.bind("<<ListboxSelect>>",lambda event:self.select_monitored_user())
-        self.activity_log=scrolledtext.ScrolledText(f,state="disabled",height=22); self.activity_log.tag_config("spam",foreground="#e53935"); self.activity_log.pack(fill="both",expand=True,padx=12,pady=(4,12))
 
     def word_block_ui(self):
         f=self.word_block_tab
@@ -1510,49 +1490,6 @@ class App:
 
     DEFAULT_WORD_BLOCKS = ["porn", "porno", "nude", "nudes", "onlyfans", "xxx", "sex video", "sexchat", "blowjob", "handjob", "dick pic", "pussy pic", "hentai", "nsfw", "camgirl", "escort", "free nitro", "nitro giveaway", "crypto giveaway", "click here"]
 
-    def refresh_monitored_users(self):
-        if not hasattr(self, "monitored_users") or self.activity_guild.current() < 0:
-            return
-        guild_id = str(self.guilds[self.activity_guild.current()][0])
-        users = self.settings.get("monitored_users", {}).get(guild_id, [])
-        self.monitored_users.delete(0, tk.END)
-        for user_id in users:
-            member = next((m for m in self.info.get(int(guild_id), {}).get("members", []) if m["id"] == str(user_id)), None)
-            label = f"{user_id} - {member['display_name']}" if member else str(user_id)
-            self.monitored_users.insert(tk.END, label)
-
-    def select_monitored_user(self):
-        selected = self.monitored_users.curselection()
-        if not selected:
-            return
-        user_id = self.monitored_users.get(selected[0]).split(" - ", 1)[0]
-        self.activity_member_id.delete(0, tk.END); self.activity_member_id.insert(0, user_id)
-        self.find_activity_member(); self.load_member_activity()
-
-    def save_monitored_user(self):
-        selected = self.activity_selection()
-        if not selected:
-            return
-        guild_id, user_id = selected
-        users = list(dict.fromkeys(map(str, self.settings.setdefault("monitored_users", {}).get(str(guild_id), []))))
-        if user_id not in users:
-            users.append(user_id)
-        self.settings["monitored_users"][str(guild_id)] = users
-        self.settings = self.store.save_settings(self.settings)
-        if self.runtime: self.runtime.settings = self.settings
-        self.refresh_monitored_users(); self.find_activity_member()
-        self.log(f"Saved {user_id} as a 24-hour monitoring target.")
-
-    def remove_monitored_user(self):
-        selected = self.activity_selection()
-        if not selected:
-            return
-        guild_id, user_id = selected
-        self.settings.setdefault("monitored_users", {})[str(guild_id)] = [value for value in self.settings.get("monitored_users", {}).get(str(guild_id), []) if str(value) != user_id]
-        self.settings = self.store.save_settings(self.settings)
-        if self.runtime: self.runtime.settings = self.settings
-        self.refresh_monitored_users()
-
     def refresh_discipline_users(self):
         if not hasattr(self,"discipline_users") or self.discipline_server.current()<0:return
         guild_id=str(self.guilds[self.discipline_server.current()][0])
@@ -1625,44 +1562,6 @@ class App:
         if self.runtime: self.runtime.settings = self.settings
         messagebox.showinfo("Saved", f"Saved {len(words)} blocked words. Railway synchronizes within 10 seconds.")
 
-    def activity_selection(self):
-        index=self.activity_guild.current()
-        user_id=self.activity_member_id.get().strip()
-        if index<0 or not user_id.isdigit():
-            messagebox.showwarning("Missing values","Select a server and enter a numeric member ID.")
-            return None
-        return self.guilds[index][0],user_id
-
-    def find_activity_member(self):
-        selected=self.activity_selection()
-        if not selected:return
-        guild_id,user_id=selected
-        member=next((m for m in self.info.get(guild_id,{}).get("members",[]) if m["id"]==user_id),None)
-        if not member:
-            return messagebox.showwarning("Member not found","This ID is not in the selected server, or member data is still loading.")
-        self.activity_member_name.config(text=f"Selected member: {member['display_name']} ({member['name']})",fg=self.SUCCESS)
-
-    def load_member_activity(self):
-        selected=self.activity_selection()
-        if not selected:return
-        guild_id,user_id=selected
-        self.find_activity_member()
-        try:
-            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-            records = [record for record in self.store.recent_member_activity(guild_id,user_id) if datetime.fromisoformat(record.get("at", "1970-01-01T00:00:00+00:00")) >= cutoff]
-            self.activity_log.config(state="normal"); self.activity_log.delete("1.0",tk.END)
-            if not records:self.activity_log.insert(tk.END,"No activity for this saved target in the last 24 hours.\n")
-            for record in records:
-                details=record.get("details",{}); event_type=record.get("event_type","activity")
-                if event_type in ("message", "message_deleted"): detail=f"#{details.get('channel','unknown')}: {details.get('content','')}"
-                elif event_type=="voice_left": detail=f"left {details.get('channel','unknown')} after {details.get('duration_seconds',0)} seconds"
-                elif event_type=="voice_joined": detail=f"joined {details.get('channel','unknown')}"
-                else: detail=str(details) if details else ""
-                tags=("spam",) if event_type.startswith("word_spam") else ()
-                self.activity_log.insert(tk.END,f"[{record.get('at','-')}] {event_type}: {detail}\n",tags)
-            self.activity_log.config(state="disabled")
-        except Exception as exc: messagebox.showerror("Activity error",str(exc))
-
     def moderate(self, action):
         i=self.mod_guild.current()
         if i<0 or not self.member_id.get().strip().isdigit(): return messagebox.showwarning("Missing values","Select a server and enter a numeric member ID.")
@@ -1675,10 +1574,10 @@ class App:
                 kind,data=self.q.get_nowait()
                 if kind=="log": self.logs.config(state="normal"); self.logs.insert(tk.END,data+"\n"); self.logs.see(tk.END); self.logs.config(state="disabled")
                 elif kind=="guilds":
-                    self.guilds=data; values=[f"{name} ({gid})" for gid,name in data]; self.custom_server["values"]=values; self.chat_server["values"]=values; self.link_server["values"]=values; self.drag_server["values"]=values; self.mod_guild["values"]=values; self.ticket_server["values"]=values; self.voice_server["values"]=values; self.greeting_server["values"]=values; self.level_server["values"]=values; self.counting_server["values"]=values; self.birthday_server["values"]=values; self.notif_server["values"]=values; self.movie_server["values"]=values; self.default_role_server["values"]=values; self.activity_guild["values"]=values; self.word_block_server["values"]=values; self.discipline_server["values"]=values
-                    if data: self.custom_server.current(0); self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0); self.activity_guild.current(0); self.discipline_server.current(0); self.refresh_discipline_users()
+                    self.guilds=data; values=[f"{name} ({gid})" for gid,name in data]; self.custom_server["values"]=values; self.chat_server["values"]=values; self.link_server["values"]=values; self.drag_server["values"]=values; self.mod_guild["values"]=values; self.ticket_server["values"]=values; self.voice_server["values"]=values; self.greeting_server["values"]=values; self.level_server["values"]=values; self.counting_server["values"]=values; self.birthday_server["values"]=values; self.notif_server["values"]=values; self.movie_server["values"]=values; self.default_role_server["values"]=values; self.word_block_server["values"]=values; self.discipline_server["values"]=values
+                    if data: self.custom_server.current(0); self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0); self.discipline_server.current(0); self.refresh_discipline_users()
                     self.set_status("Connected")
-                elif kind=="guild": self.info[data["id"]]=data; self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_monitored_users(); self.refresh_word_blocks(); self.refresh_discipline_users()
+                elif kind=="guild": self.info[data["id"]]=data; self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks(); self.refresh_discipline_users()
                 elif kind=="ticket_moderator_verified":
                     user_id = data["id"]
                     if user_id in self.ticket_moderator_ids:
@@ -1700,7 +1599,7 @@ class App:
                         # Keep every settings tab aligned with Cloudflare R2, not only
                         # permission and Auto Role tabs. This is the same shared
                         # document Railway reads on its 10-second refresh cycle.
-                        self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_monitored_users(); self.refresh_word_blocks()
+                        self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks()
                         self.header_subtitle.config(text="Settings synchronized from Cloudflare R2",fg=self.SUCCESS)
                 elif kind=="settings_sync_error": self.settings_sync_inflight=False
                 elif kind=="logs_cleared":

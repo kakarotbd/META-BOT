@@ -12,7 +12,7 @@ import boto3
 from botocore.exceptions import ClientError
 from cryptography.fernet import Fernet, InvalidToken
 
-DEFAULT_SETTINGS = {"token":"", "auto_connect":True, "allowed_roles":{}, "command_allowed_roles":{}, "chat_allowed_roles":{}, "link_allowed_roles":{}, "drag_allowed_roles":{}, "ticket_channels":{}, "ticket_moderators":{}, "temp_voice_lobbies":{}, "welcome_goodbye":{}, "leveling":{}, "role_notifications":{}, "movie_announcements":{}, "default_roles":{}, "default_role_managed_ids":{}, "birthdays":{}, "counting_channels":{}, "monitored_users":{}, "word_blocks":{}, "discipline":{}, "custom_commands":{}, "max_warnings_before_timeout":5, "timeout_minutes":10, "settings_revision":1}
+DEFAULT_SETTINGS = {"token":"", "auto_connect":True, "allowed_roles":{}, "command_allowed_roles":{}, "chat_allowed_roles":{}, "link_allowed_roles":{}, "drag_allowed_roles":{}, "ticket_channels":{}, "ticket_moderators":{}, "temp_voice_lobbies":{}, "welcome_goodbye":{}, "leveling":{}, "role_notifications":{}, "movie_announcements":{}, "default_roles":{}, "default_role_managed_ids":{}, "birthdays":{}, "counting_channels":{}, "word_blocks":{}, "discipline":{}, "custom_commands":{}, "max_warnings_before_timeout":5, "timeout_minutes":10, "settings_revision":1}
 
 class CloudflareR2Store:
     def __init__(self):
@@ -76,6 +76,7 @@ class CloudflareR2Store:
     @staticmethod
     def _normalize_settings(settings):
         value={**DEFAULT_SETTINGS, **(settings or {})}; legacy=value.get("allowed_roles", {})
+        value.pop("monitored_users", None)
         if "command_allowed_roles" not in settings: value["command_allowed_roles"]=dict(legacy)
         if "chat_allowed_roles" not in settings: value["chat_allowed_roles"]=dict(legacy)
         if "link_allowed_roles" not in settings: value["link_allowed_roles"]=dict((settings or {}).get("chat_allowed_roles", legacy))
@@ -142,9 +143,6 @@ class CloudflareR2Store:
             if str(message_id) in ids:return {"duplicate":True,"count":int(v.get("count",0))}
             v["count"]=int(v.get("count",0))+1;v["words"]=(v.get("words",[])+[str(word)])[-20:];v["message_ids"]=(ids+[str(message_id)])[-256:];v["updated_at"]=datetime.now(timezone.utc).isoformat();self._put("word_block_violations",key,v);v["duplicate"]=False;return v
         return self._atomic("word_block_violations",key,f,{})
-    def record_member_activity(self,guild_id,user_id,username,event_type,details=None,event_id=None):
-        value={"guild_id":str(guild_id),"user_id":str(user_id),"username":str(username),"event_type":str(event_type),"details":details or {},"at":datetime.now(timezone.utc).isoformat()}; self._put("member_activity",event_id or f"{guild_id}_{user_id}_{int(time.time()*1000)}-{uuid.uuid4().hex[:6]}",value); return value
-    def recent_member_activity(self,guild_id,user_id,limit=200): return [v for _,v,_ in sorted([(i,v,m) for i,v,m in self._list("member_activity") if str(v.get("guild_id"))==str(guild_id) and str(v.get("user_id"))==str(user_id)],key=lambda x:x[1].get("at",""),reverse=True)[:max(1,min(int(limit),500))]]
 
     def _save_image(self,c,i,content_type,data):
         key=f"{self.root}/media/{c}/{i}"; self.s3.put_object(Bucket=self.bucket,Key=key,Body=data,ContentType=content_type,CacheControl="public, max-age=31536000, immutable"); self._put(c,i,{"backend":"r2","key":key,"content_type":content_type,"size":len(data)}); return i
@@ -158,13 +156,6 @@ class CloudflareR2Store:
     def get_notification_image(self,i):return self._get_image("notification_images",i)
     def save_birthday_image(self,i,t,d):return self._save_image("birthday_images",i,t,d)
     def get_birthday_image(self,i):return self._get_image("birthday_images",i)
-    def start_member_voice_session(self,guild_id,user_id,username,channel_name):
-        key=f"{guild_id}_{user_id}"; value={"guild_id":str(guild_id),"user_id":str(user_id),"username":str(username),"channel_name":str(channel_name),"started_at":datetime.now(timezone.utc).isoformat()}
-        return self._atomic("member_voice_sessions",key,lambda old: False if old else (self._put("member_voice_sessions",key,value),True)[1],None)
-    def end_member_voice_session(self,guild_id,user_id):
-        key=f"{guild_id}_{user_id}"; old=self._get("member_voice_sessions",key)
-        if old:self._delete("member_voice_sessions",key)
-        return old
     def submit_counting_number(self,guild_id,channel_id,user_id,message_id,submitted_number):
         key=str(guild_id)
         def f(state):

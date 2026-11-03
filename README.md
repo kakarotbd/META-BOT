@@ -130,9 +130,6 @@ If an open ticket has no staff reply in its private channel after 15 minutes, th
 
 In the GUI's **Temporary Voice** tab, select one voice channel per server as the join-to-create lobby and save it. When a member joins that lobby, the bot creates a room named after the member, moves them into it, and posts a voice-chat dashboard with emoji buttons for Lock, Unlock, Rename, and Member Limit. Only the room owner can use the dashboard. Room ownership, names, limits, locks, dashboard message ID, and lifecycle state are encrypted in Cloudflare R2; after a Railway restart the stored dashboard controls are restored. Empty rooms are deleted and their Cloudflare R2 record is retained with a closed status.
 
-## Member activity
-
-The **Member Activity** GUI tab accepts a member ID from a selected server, displays that member’s name, and loads shared encrypted activity records: messages and channels, member joins/leaves, Discord-invite blocks, voice joins/moves/leaves, and voice-session duration. GUI and Railway write the same Cloudflare R2 records. Tracking starts after deployment; Discord does not provide activity from other servers or private DMs. All Discord invite links are blocked in monitored server chat because Discord does not reveal an invite’s destination without resolving it.
 ## Approved server notice
 
 META BOT is configured only for MetaVerse Bangladesh (`ALLOWED_GUILD_ID=1517192928068636703`). If it is added to another server, the server owner receives this English inbox message once: “META BOT was designed exclusively for the MetaVerse Bangladesh Discord server. If you would like a custom bot for your own server, please contact kakarotbd via Discord DM.” The one-time marker is saved atomically in Cloudflare R2, so GUI and Railway cannot send duplicate notices.

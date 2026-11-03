@@ -52,6 +52,13 @@ class CloudflareD1Store(CloudflareR2Store):
         if not self._schema_ready:
             self._query("CREATE TABLE IF NOT EXISTS records (collection TEXT NOT NULL, record_id TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (collection, record_id));")
             self._schema_ready = True
+            # Retire the removed monitor and voice-session collections, including saved history.
+            self._query("DELETE FROM records WHERE collection IN (?,?)", ("member_activity", "member_voice_sessions"))
+            settings=self._get("settings","main")
+            if settings and "monitored_users" in settings:
+                settings.pop("monitored_users",None)
+                settings["settings_revision"]=int(settings.get("settings_revision",0))+1
+                self._put("settings","main",settings)
 
     def _put(self, collection, ident, value):
         self._ensure_schema()
