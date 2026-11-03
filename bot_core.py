@@ -73,61 +73,51 @@ def _fetch_leaderboard_image(url):
 
 def render_leaderboard_png(guild_name, icon_url, entries):
     """Render the top ten lifetime-XP users into a polished Discord PNG card."""
-    width, height = 1200, 820
-    background = Image.new("RGB", (width, height), "#0b1020")
-    pixels = background.load()
-    for y in range(height):
-        ratio = y / height
-        color = (int(17 - ratio * 5), int(26 - ratio * 7), int(48 - ratio * 8))
-        for x in range(width):
-            pixels[x, y] = color
-    image = background.convert("RGBA")
+    width, height = 960, 920
+    image = Image.new("RGBA", (width, height), "#090e19")
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((28, 26, width-28, height-26), radius=28, fill="#10192b", outline="#293756", width=2)
-    draw.rounded_rectangle((48, 46, width-48, 205), radius=24, fill="#17243b")
-    draw.ellipse((48, 46, 220, 218), fill="#6d5dfc")
-    draw.ellipse((79, 77, 190, 188), fill="#293c64")
-    draw.text((270, 74), "LEVEL LEADERBOARD", font=_leaderboard_font(19, True), fill="#a8b8d8")
-    draw.text((270, 108), str(guild_name)[:38], font=_leaderboard_font(39, True), fill="#f5f7ff")
-    draw.text((270, 164), "TOP 10  •  RANKED BY TOTAL XP", font=_leaderboard_font(16, True), fill="#8ea3ca")
+    draw.rounded_rectangle((22, 22, width-22, height-22), radius=26, fill="#101827", outline="#263650", width=2)
+    draw.rounded_rectangle((42, 42, width-42, 210), radius=20, fill="#17243a")
+    draw.rounded_rectangle((62, 62, 182, 182), radius=16, fill="#273650", outline="#7185a8", width=2)
+    draw.text((218, 68), "LEVEL LEADERBOARD", font=_leaderboard_font(19, True), fill="#a8b8d8")
+    draw.text((218, 101), str(guild_name)[:30], font=_leaderboard_font(34, True), fill="#f5f7ff")
+    draw.text((218, 158), "TOP 10  |  RANKED BY TOTAL XP", font=_leaderboard_font(15, True), fill="#a3b5d4")
     images = [icon_url] + [entry.get("avatar_url") for entry in entries]
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         fetched = list(pool.map(_fetch_leaderboard_image, images))
     if fetched and fetched[0]:
-        icon = ImageOps.fit(fetched[0], (132, 132), centering=(0.5, 0.5))
-        mask = Image.new("L", (132,132), 0); ImageDraw.Draw(mask).ellipse((0,0,131,131), fill=255)
-        image.paste(icon, (59,59), mask)
-        draw = ImageDraw.Draw(image)
-        draw.ellipse((56,56,194,194), outline="#cbd7ff", width=4)
-    body_font = _leaderboard_font(21)
-    small_font = _leaderboard_font(16)
-    bold_font = _leaderboard_font(22, True)
+        icon = ImageOps.fit(fetched[0], (112, 112), centering=(0.5, 0.5))
+        mask = Image.new("L", (112,112), 0); ImageDraw.Draw(mask).rounded_rectangle((0,0,111,111), radius=13, fill=255)
+        image.paste(icon, (66,66), mask)
+    body_font = _leaderboard_font(19)
+    small_font = _leaderboard_font(15)
+    bold_font = _leaderboard_font(20, True)
     rank_colors = ["#f3c969", "#c8d3e8", "#d89468"]
-    row_start, row_height = 226, 54
+    row_start, row_height = 226, 62
     for index, entry in enumerate(entries[:10]):
         y = row_start + index * row_height
         fill = "#1b2941" if index % 2 == 0 else "#162238"
-        draw.rounded_rectangle((54,y,width-54,y+46), radius=15, fill=fill)
+        draw.rounded_rectangle((48,y,width-48,y+54), radius=14, fill=fill)
         rank_color = rank_colors[index] if index < 3 else "#8798b9"
-        draw.ellipse((65,y+5,101,y+41), fill="#293750")
+        draw.rounded_rectangle((59,y+8,99,y+46), radius=11, fill="#293750")
         rank_text = str(index+1)
         rank_box = draw.textbbox((0,0),rank_text,font=bold_font)
-        draw.text((83-(rank_box[2]-rank_box[0])/2,y+12),rank_text,font=bold_font,fill=rank_color)
+        draw.text((79-(rank_box[2]-rank_box[0])/2,y+15),rank_text,font=bold_font,fill=rank_color)
         avatar = fetched[index+1] if index+1 < len(fetched) else None
         if avatar:
-            avatar = ImageOps.fit(avatar,(38,38),centering=(0.5,0.5))
-            mask = Image.new("L",(38,38),0); ImageDraw.Draw(mask).ellipse((0,0,37,37),fill=255)
-            image.paste(avatar,(116,y+4),mask)
+            avatar = ImageOps.fit(avatar,(40,40),centering=(0.5,0.5))
+            mask = Image.new("L",(40,40),0); ImageDraw.Draw(mask).ellipse((0,0,39,39),fill=255)
+            image.paste(avatar,(115,y+7),mask)
         else:
-            draw.ellipse((116,y+4,154,y+42),fill="#344866")
+            draw.ellipse((115,y+7,155,y+47),fill="#344866")
             initials = (entry.get("name") or "?").strip()[:1].upper()
-            draw.text((127,y+10),initials,font=small_font,fill="#dce6ff")
-        draw.text((170,y+7),(entry.get("name") or "Unknown member")[:28],font=body_font,fill="#f2f5ff")
-        draw.text((171,y+29),f"LEVEL {int(entry.get('level',1)):,}",font=small_font,fill="#91a5cd")
+            draw.text((128,y+16),initials,font=small_font,fill="#dce6ff")
+        draw.text((172,y+7),(entry.get("name") or "Unknown member")[:24],font=body_font,fill="#f2f5ff")
+        draw.text((173,y+32),f"LEVEL {int(entry.get('level',1)):,}",font=small_font,fill="#a9bad8")
         total_text=f"{int(entry.get('total_xp',0)):,} XP"
         text_box=draw.textbbox((0,0),total_text,font=bold_font)
-        draw.text((width-78-(text_box[2]-text_box[0]),y+12),total_text,font=bold_font,fill="#a78bfa")
-    draw.text((58,height-59),"Keep earning XP to climb the ranks",font=small_font,fill="#7488ae")
+        draw.text((width-65-(text_box[2]-text_box[0]),y+17),total_text,font=bold_font,fill="#c2adff")
+    draw.text((52,height-56),"Keep earning XP to climb the ranks",font=small_font,fill="#879ab9")
     output=io.BytesIO(); image.convert("RGB").save(output,format="PNG",optimize=True)
     output.seek(0)
     return output
