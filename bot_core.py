@@ -423,9 +423,12 @@ class TicketStaffActionView(discord.ui.View):
                                              custom_id=f"ticket_staff:{document_id}:resolved")
         closed_button = discord.ui.Button(label="Closed", style=discord.ButtonStyle.danger, emoji="\U0001f512",
                                            custom_id=f"ticket_staff:{document_id}:closed")
+        transfer_button = discord.ui.Button(label="Change Staff", style=discord.ButtonStyle.secondary, emoji="\U0001f504",
+                                            custom_id=f"ticket_staff:{document_id}:transfer")
         resolved_button.callback = self.mark_resolved
         closed_button.callback = self.mark_closed
-        self.add_item(resolved_button); self.add_item(closed_button)
+        transfer_button.callback = self.change_staff
+        self.add_item(resolved_button); self.add_item(closed_button); self.add_item(transfer_button)
 
     async def _authorized_open_ticket(self, interaction):
         try:
@@ -451,6 +454,57 @@ class TicketStaffActionView(discord.ui.View):
         ticket = await self._authorized_open_ticket(interaction)
         if ticket:
             await interaction.response.send_modal(TicketStaffNoteModal(self.moderator, ticket, "closed", interaction.message))
+
+    async def change_staff(self, interaction):
+        ticket=await self._authorized_open_ticket(interaction)
+        if not ticket:return
+        await interaction.response.defer(ephemeral=True,thinking=True)
+        guild=self.moderator.bot.get_guild(int(ticket["guild_id"]))
+        if not guild:
+            return await interaction.followup.send("The support server is unavailable right now.",ephemeral=True)
+        staff_ids=list(dict.fromkeys(map(str,self.moderator.settings.get("ticket_moderators",{}).get(str(guild.id),[]))))
+        if not staff_ids:
+            fallback=str(APP_CONFIG.admin_user_id)
+            if fallback.isdigit():staff_ids=[fallback]
+        options=[]
+        for staff_id in staff_ids:
+            if staff_id==str(ticket.get("assigned_moderator_id")):continue
+            if not staff_id.isdigit():continue
+            staff_member=guild.get_member(int(staff_id))
+            if not staff_member:
+                try:staff_member=await guild.fetch_member(int(staff_id))
+                except (discord.NotFound,discord.Forbidden,discord.HTTPException):continue
+            options.append(discord.SelectOption(label=staff_member.display_name[:100],value=staff_id,description=f"{staff_member} • Available support staff"[:100]))
+            if len(options)>=25:break
+        if not options:
+            return await interaction.followup.send("There are no other available ticket moderators to transfer this ticket to.",ephemeral=True)
+        view=TicketTransferView(self.moderator,ticket,interaction.user.id,interaction.message,options)
+        await interaction.followup.send("Choose the new moderator for this ticket:",view=view,ephemeral=True)
+
+
+class TicketTransferView(discord.ui.View):
+    """Private staff picker for transferring an open ticket."""
+    def __init__(self,moderator,ticket,requester_id,origin_message,options):
+        super().__init__(timeout=120)
+        self.moderator,self.ticket,self.requester_id,self.origin_message=moderator,dict(ticket),requester_id,origin_message
+        self.staff_select=discord.ui.Select(placeholder="Select available support staff",min_values=1,max_values=1,options=options)
+        self.staff_select.callback=self.transfer
+        self.add_item(self.staff_select)
+
+    async def interaction_check(self,interaction):
+        if interaction.user.id==self.requester_id:return True
+        await interaction.response.send_message("Only the moderator who opened this transfer picker can use it.",ephemeral=True)
+        return False
+
+    async def transfer(self,interaction):
+        new_staff_id=self.staff_select.values[0]
+        await interaction.response.defer(ephemeral=True,thinking=True)
+        try:
+            updated=await self.moderator.transfer_ticket(self.ticket,new_staff_id,self.requester_id,self.origin_message)
+        except Exception as exc:
+            return await interaction.followup.send(f"Ticket transfer failed: {exc}",ephemeral=True)
+        self.stop()
+        await interaction.followup.send(f"Ticket **#{updated['ticket_id']}** was transferred successfully.",ephemeral=True)
 
 
 class TicketStaffNoteModal(discord.ui.Modal):
@@ -1720,7 +1774,7 @@ class ModeratorBot:
                     if ticket.get("status")!="open" or ticket.get("staff_replied_at"):
                         continue
                     try:
-                        created=datetime.fromisoformat(str(ticket["created_at"]).replace("Z","+00:00"))
+                        created=datetime.fromisoformat(str(ticket.get("staff_assigned_at") or ticket["created_at"]).replace("Z","+00:00"))
                         if created.tzinfo is None:created=created.replace(tzinfo=timezone.utc)
                     except (KeyError,TypeError,ValueError):
                         continue
@@ -2120,7 +2174,8 @@ class ModeratorBot:
             f"## Ticket #{ticket['ticket_id']}\n**Category:** {ticket.get('category') or '-'}\n**Opened by:** {owner.mention}\n\n{ticket.get('problem') or '-'}",
             allowed_mentions=discord.AllowedMentions.none(),
         )
-        ticket = await asyncio.to_thread(self.store.update_ticket_fields, ticket["document_id"], {"ticket_channel_id": str(channel.id)})
+        updated_ticket = await asyncio.to_thread(self.store.update_ticket_fields, ticket["document_id"], {"ticket_channel_id": str(channel.id)})
+        ticket.clear(); ticket.update(updated_ticket)
         self.open_ticket_channels[str(channel.id)]=dict(ticket)
         self.log(f"Created private chat #{channel.name} for ticket #{ticket['ticket_id']} in {guild.name}.")
         return channel
@@ -2154,32 +2209,109 @@ class ModeratorBot:
         """Shared GUI completion path: delete the chat and notify the ticket owner."""
         await self.delete_ticket_channel(ticket)
         await self.notify_ticket_status(ticket)
+    def ticket_staff_embed(self,ticket):
+        category=str(ticket.get("category") or "Uncategorized")
+        if ticket.get("other_category"):category+=f" — {ticket['other_category']}"
+        embed=discord.Embed(title=f"Support Ticket #{ticket.get('ticket_id')}",description=str(ticket.get("problem") or "No problem details were provided."),colour=discord.Colour.blurple())
+        embed.add_field(name="Submitted by",value=f"{ticket.get('username','Unknown user')}\n`{ticket.get('user_id','-')}`",inline=True)
+        embed.add_field(name="Category",value=category[:1024],inline=True)
+        if ticket.get("contact"):
+            embed.add_field(name="Contact details",value=str(ticket["contact"])[:1024],inline=False)
+        channel_id=str(ticket.get("ticket_channel_id") or "")
+        if channel_id.isdigit():embed.add_field(name="Private support chat",value=f"<#{channel_id}>",inline=False)
+        embed.add_field(name="Status",value=str(ticket.get("status","open")).title(),inline=True)
+        embed.add_field(name="Current assigned staff",value=f"<@{ticket.get('assigned_moderator_id')}>" if ticket.get("assigned_moderator_id") else "Unassigned",inline=True)
+        embed.set_footer(text="Use the controls below to resolve, close, or transfer this ticket.")
+        return embed
+
     async def send_ticket_copy_to_staff(self, ticket):
-        """DM the ticket to its atomically assigned moderator."""
+        """DM the complete ticket and persistent actions to its assigned moderator."""
         staff_id = str(ticket.get("assigned_moderator_id", ""))
         if not staff_id.isdigit():
             self.log(f"Ticket #{ticket['ticket_id']} has no assigned moderator.")
-            return
+            return False
         try:
             staff = self.bot.get_user(int(staff_id)) or await self.bot.fetch_user(int(staff_id))
-        except discord.NotFound:
-            self.log(f"Assigned ticket moderator {staff_id} was not found.")
-            return
-        category = ticket["category"] + (f" ? {ticket['other_category']}" if ticket.get("other_category") else "")
-        embed = discord.Embed(title="\U0001f3ab New Support Ticket #" + str(ticket.get("ticket_id")), colour=discord.Colour.blurple())
-        embed.add_field(name="From", value=f"{ticket['username']} (`{ticket['user_id']}`)", inline=False)
-        embed.add_field(name="Category", value=category or "-", inline=False)
-        category = ticket["category"] + (" - " + str(ticket["other_category"]) if ticket.get("other_category") else "")
-        embed = discord.Embed(title="Ticket #" + str(ticket.get("ticket_id")), colour=discord.Colour.blurple())
+        except discord.HTTPException as exc:
+            self.log(f"Could not find assigned ticket moderator {staff_id}: {exc}")
+            return False
         try:
-            message = await staff.send(embed=embed, view=TicketStaffActionView(self, ticket))
+            message = await staff.send(embed=self.ticket_staff_embed(ticket), view=TicketStaffActionView(self, ticket), allowed_mentions=discord.AllowedMentions.none())
         except discord.Forbidden:
-            self.log(f"Could not DM ticket #{ticket['ticket_id']} to assigned moderator {staff_id} (their DMs are closed).")
-            return
+            self.log(f"Could not DM ticket #{ticket['ticket_id']} to staff {staff_id} (their DMs are closed).")
+            return False
+        except discord.HTTPException as exc:
+            self.log(f"Could not DM ticket #{ticket['ticket_id']} to staff {staff_id}: {exc}")
+            return False
         try:
             await asyncio.to_thread(self.store.update_ticket_fields, ticket["document_id"], {"staff_dm_channel_id": str(message.channel.id), "staff_dm_message_id": str(message.id)})
         except Exception as exc:
             self.log(f"Could not save the ticket's staff DM reference: {exc}")
+            try:await message.edit(view=None)
+            except discord.HTTPException:pass
+            return False
+        return True
+
+    async def transfer_ticket(self,ticket,new_staff_id,actor_id,old_staff_message=None):
+        """Reassign an open ticket, move private-channel access, and notify both sides."""
+        old_staff_id=str(ticket.get("assigned_moderator_id",""))
+        new_staff_id=str(new_staff_id)
+        guild=self.bot.get_guild(int(ticket["guild_id"]))
+        if not guild:raise RuntimeError("The support server is unavailable.")
+        new_staff=guild.get_member(int(new_staff_id)) if new_staff_id.isdigit() else None
+        if not new_staff and new_staff_id.isdigit():
+            try:new_staff=await guild.fetch_member(int(new_staff_id))
+            except discord.HTTPException as exc:raise RuntimeError("The selected moderator is no longer available in this server.") from exc
+        channel_id=str(ticket.get("ticket_channel_id") or "")
+        channel=guild.get_channel(int(channel_id)) if channel_id.isdigit() else None
+        old_staff=guild.get_member(int(old_staff_id)) if old_staff_id.isdigit() else None
+        if not old_staff and old_staff_id.isdigit():
+            try:old_staff=await guild.fetch_member(int(old_staff_id))
+            except discord.HTTPException:old_staff=None
+        updated=await asyncio.to_thread(self.store.reassign_ticket,ticket["document_id"],actor_id,new_staff_id)
+        if channel_id:self.open_ticket_channels[channel_id]=dict(updated)
+        new_access_set=False
+        try:
+            if isinstance(channel,discord.TextChannel):
+                await channel.set_permissions(new_staff,view_channel=True,send_messages=True,read_message_history=True,reason=f"Ticket #{ticket['ticket_id']} reassigned by staff")
+                new_access_set=True
+                if old_staff and old_staff_id!=new_staff_id:
+                    await channel.set_permissions(old_staff,overwrite=None,reason=f"Ticket #{ticket['ticket_id']} reassigned to another moderator")
+        except discord.HTTPException as exc:
+            await asyncio.to_thread(self.store.reassign_ticket,ticket["document_id"],new_staff_id,old_staff_id)
+            if channel_id:self.open_ticket_channels[channel_id]=dict(ticket)
+            if new_access_set and isinstance(channel,discord.TextChannel):
+                try:
+                    await channel.set_permissions(new_staff,overwrite=None)
+                    if old_staff:await channel.set_permissions(old_staff,view_channel=True,send_messages=True,read_message_history=True)
+                except discord.HTTPException as rollback_exc:self.log(f"Could not restore ticket #{ticket['ticket_id']} channel permissions after transfer failure: {rollback_exc}")
+            raise RuntimeError(f"Could not update private support chat access: {exc}") from exc
+        delivered=await self.send_ticket_copy_to_staff(updated)
+        if not delivered:
+            await asyncio.to_thread(self.store.reassign_ticket,ticket["document_id"],new_staff_id,old_staff_id)
+            if channel_id:self.open_ticket_channels[channel_id]=dict(ticket)
+            if new_access_set and isinstance(channel,discord.TextChannel):
+                try:
+                    if old_staff:await channel.set_permissions(old_staff,view_channel=True,send_messages=True,read_message_history=True)
+                    await channel.set_permissions(new_staff,overwrite=None)
+                except discord.HTTPException as exc:self.log(f"Could not restore ticket #{ticket['ticket_id']} channel permissions after transfer rollback: {exc}")
+            raise RuntimeError("The new moderator could not receive the ticket in their Discord inbox. The previous assignment was restored.")
+        if isinstance(channel,discord.TextChannel):
+            notice=discord.Embed(title="Support Team Update",description=f"Your ticket is now assigned to **{new_staff.display_name}**. They have received your original request and will continue helping you in this support chat.",colour=discord.Colour.blurple())
+            notice.add_field(name="New support moderator",value=new_staff.mention,inline=False)
+            try:await channel.send(embed=notice,allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException as exc:self.log(f"Could not post the reassignment notice in ticket #{ticket['ticket_id']}: {exc}")
+            updated["ticket_channel_id"]=channel_id
+            self.open_ticket_channels[channel_id]=dict(updated)
+        if old_staff_message:
+            try:
+                embed=old_staff_message.embeds[0].copy() if old_staff_message.embeds else discord.Embed(title=f"Support Ticket #{ticket['ticket_id']}")
+                embed.colour=discord.Colour.orange()
+                embed.add_field(name="Assignment update",value=f"Transferred to {new_staff.mention}. This ticket's controls are now with the new assigned moderator.",inline=False)
+                await old_staff_message.edit(embed=embed,view=None,allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException as exc:self.log(f"Could not update old staff inbox controls for ticket #{ticket['ticket_id']}: {exc}")
+        self.log(f"Ticket #{ticket['ticket_id']} transferred from {old_staff_id} to {new_staff_id} by {actor_id}.")
+        return updated
     async def restore_ticket_staff_dashboards(self):
         """Restore persistent staff controls, rating prompts, and open ticket tracking."""
         try:

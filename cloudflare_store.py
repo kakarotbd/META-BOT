@@ -183,7 +183,7 @@ class CloudflareR2Store:
             if fallback.isdigit(): mods=[fallback]
         if not mods: raise RuntimeError("No ticket moderators are configured and ADMIN_USER_ID is invalid.")
         key=uuid.uuid4().hex; cursor=self._get("ticket_assignment_cursors",str(guild_id)) or {"next_index":0}; index=int(cursor.get("next_index",0))%len(mods)
-        ticket={"ticket_id":key[:8].upper(),"guild_id":str(guild_id),"user_id":str(user_id),"username":username,"category":category,"other_category":other_category,"contact":contact,"problem":problem,"assigned_moderator_id":mods[index],"status":"open","created_at":datetime.now(timezone.utc).isoformat()}; self._put("tickets",key,ticket); self._put("ticket_assignment_cursors",str(guild_id),{"next_index":(index+1)%len(mods)}); ticket["document_id"]=key; return ticket
+        created=datetime.now(timezone.utc).isoformat(); ticket={"ticket_id":key[:8].upper(),"guild_id":str(guild_id),"user_id":str(user_id),"username":username,"category":category,"other_category":other_category,"contact":contact,"problem":problem,"assigned_moderator_id":mods[index],"staff_assigned_at":created,"status":"open","created_at":created}; self._put("tickets",key,ticket); self._put("ticket_assignment_cursors",str(guild_id),{"next_index":(index+1)%len(mods)}); ticket["document_id"]=key; return ticket
     def list_tickets(self,limit=200): return [dict(v,document_id=i) for i,v,_ in sorted(self._list("tickets"),key=lambda x:x[1].get("created_at",""),reverse=True)[:limit]]
     def get_ticket(self,document_id):
         v=self._get("tickets",document_id); return dict(v,document_id=document_id) if v else None
@@ -208,6 +208,26 @@ class CloudflareR2Store:
             ticket.update({"staff_replied_at":datetime.now(timezone.utc).isoformat(),"first_staff_reply_id":str(staff_id)})
             self._put("tickets",document_id,ticket); return True
         return self._atomic("tickets",document_id,mark,None)
+    def reassign_ticket(self,document_id,actor_id,new_staff_id):
+        ticket=self.get_ticket(document_id)
+        if not ticket:raise RuntimeError("Ticket no longer exists.")
+        guild_id=str(ticket["guild_id"])
+        settings=self.get_settings()
+        available=list(dict.fromkeys(map(str,settings.get("ticket_moderators",{}).get(guild_id,[]))))
+        if not available:
+            fallback=os.getenv("ADMIN_USER_ID","").strip()
+            if fallback.isdigit():available=[fallback]
+        new_staff_id=str(new_staff_id)
+        if new_staff_id not in available:raise RuntimeError("The selected user is not in the available ticket staff list.")
+        def transfer(current):
+            if not current or current.get("status")!="open":raise RuntimeError("Only an open ticket can be reassigned.")
+            if str(current.get("assigned_moderator_id"))!=str(actor_id):raise RuntimeError("Only the currently assigned moderator can reassign this ticket.")
+            if str(current.get("assigned_moderator_id"))==new_staff_id:raise RuntimeError("This ticket is already assigned to that moderator.")
+            history=list(current.get("assignment_history",[]))
+            history.append({"from":str(current.get("assigned_moderator_id")),"to":new_staff_id,"by":str(actor_id),"at":datetime.now(timezone.utc).isoformat()})
+            current.update({"assigned_moderator_id":new_staff_id,"assignment_history":history[-50:],"staff_assigned_at":datetime.now(timezone.utc).isoformat(),"staff_replied_at":None,"first_staff_reply_id":"","staff_pinged_at":None,"warning_sent_at":None})
+            self._put("tickets",document_id,current); return dict(current,document_id=document_id)
+        return self._atomic("tickets",document_id,transfer,None)
     def update_ticket_fields(self,document_id,updates):
         v=self._get("tickets",document_id)
         if not v: raise RuntimeError("Ticket no longer exists.")

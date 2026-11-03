@@ -126,6 +126,8 @@ Either action marks the ticket in encrypted Cloudflare R2, disables the buttons 
 
 If an open ticket has no staff reply in its private channel after 15 minutes, the assigned moderator is mentioned there. After one hour, both the assigned moderator and ticket owner are mentioned with a warning. Reminders stop when a configured ticket moderator replies in the ticket channel. When staff choose **Closed**, the user receives a private 1–5 star rating prompt with optional written feedback; the review is sent to the assigned moderator's inbox. Ticket staff can DM the bot **`star`** to see their total star points, review count, and average rating. Ratings and reminder state use the same shared encrypted ticket store.
 
+The assigned moderator can also choose **Change Staff** beside the **Resolved** and **Closed** controls, then select another configured moderator. The new moderator receives the complete ticket details and all ticket controls; the former moderator's controls are disabled. The private support chat receives a clear English reassignment notice for the ticket owner.
+
 ## Temporary voice rooms
 
 In the GUI's **Temporary Voice** tab, select one voice channel per server as the join-to-create lobby and save it. When a member joins that lobby, the bot creates a room named after the member, moves them into it, and posts a voice-chat dashboard with emoji buttons for Lock, Unlock, Rename, and Member Limit. Only the room owner can use the dashboard. Room ownership, names, limits, locks, dashboard message ID, and lifecycle state are encrypted in Cloudflare R2; after a Railway restart the stored dashboard controls are restored. Empty rooms are deleted and their Cloudflare R2 record is retained with a closed status.
