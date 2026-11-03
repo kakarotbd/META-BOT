@@ -36,6 +36,10 @@ Run only **one live Discord gateway connection for each Discord bot token**. If 
 
 Enable **Message Content Intent** and **Server Members Intent** in the Discord Developer Portal. The generated invite requests **Administrator** permission, which is required for temporary-room creation, permission changes, and moving members.
 
+## Discipline voice restrictions
+
+In the desktop GUI, open **Discipline**, choose a server, enter the member's Discord user ID, and set the daily restriction start and end using AM/PM. The schedule uses Bangladesh time (`Asia/Dhaka`) every day. The bot disconnects the member when they join voice during the restricted interval and checks connected voice members every 20 seconds so it also disconnects them when the interval begins. Rules are saved with the shared settings and Railway picks them up on its normal 10-second settings refresh. The bot needs permission to move members (the standard invite requests Administrator).
+
 ## Shared application configuration
 
 `bot_app_config.txt` contains non-secret display metadata for both `bot.py` and `railway_bot.py`:
@@ -136,7 +140,7 @@ After creating a ticket, the user receives a **Cancel Ticket** button in the con
 
 ## Birthdays
 
-Use the GUI's **Birthdays** tab to pick one text channel per server and (optionally) upload a birthday image. The bot posts a persistent **🎂 Add Birthday** button there. Clicking it opens a popup asking for day, month, and year; submitting saves the date and shows a private ("only you can see this") confirmation. Clicking **Add Birthday** again after a date is already saved shows a private warning asking whether to change it, instead of silently overwriting anything. On the day itself, the bot posts `Happy Birthday @member` in that same channel with an English wish message and the uploaded image, exactly once per member per year, even if GUI and Railway are both online. GUI and Railway share the same encrypted birthday data and image, so a date saved from either side stays in sync.
+Use the GUI's **Birthdays** tab to choose a birthday entry channel and a separate birthday wish channel per server, and optionally upload a birthday image. The bot posts a persistent **🎂 Add Birthday** button in the entry channel. Clicking it opens a popup asking for day, month, and year; submitting saves the date and shows a private confirmation. Clicking **Add Birthday** again after a date is saved shows a private warning before changing it. On the day itself, the bot posts the birthday wish in the selected wish channel, exactly once per member per year, even if GUI and Railway are both online. Older settings without a separate wish channel continue using the entry channel for wishes. GUI and Railway share the encrypted birthday data and image.
 
 ## What remains online on Railway
 

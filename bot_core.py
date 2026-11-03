@@ -561,6 +561,41 @@ class ModeratorBot:
             if started:
                 await asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "voice_joined", {"channel": after.channel.name})
 
+    def discipline_restricted(self, guild_id, user_id, now=None):
+        """Whether a member is inside their recurring Bangladesh-time voice restriction."""
+        rule = self.settings.get("discipline", {}).get(str(guild_id), {}).get(str(user_id))
+        if not rule:
+            return False
+        try:
+            local = (now or datetime.now(ZoneInfo(BANGLADESH_TIMEZONE))).astimezone(ZoneInfo(BANGLADESH_TIMEZONE))
+            current = local.hour * 60 + local.minute
+            start, end = int(rule["start"]), int(rule["end"])
+            return start <= current < end if start < end else current >= start or current < end
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    async def enforce_discipline(self, member):
+        if member.bot or not member.voice or not member.voice.channel or not self.discipline_restricted(member.guild.id, member.id):
+            return False
+        try:
+            await member.move_to(None, reason="Discipline: voice restricted during configured Bangladesh time")
+            self.log(f"Discipline disconnected {member} ({member.id}) from voice in {member.guild.name}.")
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            self.log(f"Discipline could not disconnect {member} ({member.id}): {exc}")
+        return True
+
+    async def discipline_tick(self):
+        """Catch members already connected when their daily restriction begins."""
+        while not self.bot.is_closed():
+            for guild in self.bot.guilds:
+                if guild.id == APP_CONFIG.allowed_guild_id:
+                    for member in guild.voice_client.channel.members if guild.voice_client and guild.voice_client.channel else []:
+                        pass
+                    for channel in guild.voice_channels:
+                        for member in list(channel.members):
+                            await self.enforce_discipline(member)
+            await asyncio.sleep(20)
+
     async def notify_external_guild_owner(self, guild):
         """Post one notice in an unauthorized guild, then leave it."""
         if guild.id == APP_CONFIG.allowed_guild_id:
@@ -1120,13 +1155,13 @@ class ModeratorBot:
         for guild_id_str, config in self.settings.get("birthdays", {}).items():
             today = datetime.now(self.configured_timezone(config))
             date_str = today.strftime("%Y-%m-%d")
-            channel_id = str(config.get("channel_id", ""))
-            if not channel_id:
+            wish_channel_id = str(config.get("wish_channel_id") or config.get("channel_id", ""))
+            if not wish_channel_id:
                 continue
             guild = self.bot.get_guild(int(guild_id_str))
             if not guild:
                 continue
-            channel = guild.get_channel(int(channel_id))
+            channel = guild.get_channel(int(wish_channel_id))
             if not isinstance(channel, (discord.TextChannel, discord.Thread)):
                 continue
             try:
@@ -1593,6 +1628,7 @@ class ModeratorBot:
             if not self.background_tasks_started:
                 self.background_tasks_started = True
                 asyncio.create_task(self.refresh_settings())
+                asyncio.create_task(self.discipline_tick())
                 asyncio.create_task(self.restore_temp_voice_dashboards())
                 # Railway is the sole voice-XP scheduler; it shares Cloudflare R2 state
                 # with the GUI without creating duplicate transaction writers.
@@ -1628,6 +1664,9 @@ class ModeratorBot:
         async def on_voice_state_update(member, before, after):
             # Keep R2 activity logging off the critical temporary-room path.
             asyncio.create_task(self.track_member_voice_activity(member, before, after))
+            if after.channel:
+                if await self.enforce_discipline(member):
+                    return
             await self.handle_temp_voice_update(member, before, after)
         @bot.event
         async def on_member_join(member):

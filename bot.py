@@ -183,10 +183,11 @@ class App:
         self.moderation_page, self.moderation_tab = self.make_scrollable_tab(tabs)
         self.activity_page, self.activity_tab = self.make_scrollable_tab(tabs)
         self.word_block_page, self.word_block_tab = self.make_scrollable_tab(tabs)
+        self.discipline_page, self.discipline_tab = self.make_scrollable_tab(tabs)
         self.log_page, self.log_tab = self.make_scrollable_tab(tabs)
-        tabs.add(self.connection_page, text="Overview"); tabs.add(self.custom_commands_page, text="GIF Commands"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.activity_page, text="User Monitoring"); tabs.add(self.word_block_page, text="Word Block"); tabs.add(self.log_page, text="Live Logs")
+        tabs.add(self.connection_page, text="Overview"); tabs.add(self.custom_commands_page, text="GIF Commands"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.activity_page, text="User Monitoring"); tabs.add(self.word_block_page, text="Word Block"); tabs.add(self.discipline_page, text="Discipline"); tabs.add(self.log_page, text="Live Logs")
         self.notif_entries, self.notif_edit_index = {}, None
-        self.connection_ui(); self.custom_commands_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui(); self.activity_ui(); self.word_block_ui()
+        self.connection_ui(); self.custom_commands_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui(); self.activity_ui(); self.word_block_ui(); self.discipline_ui()
         log_actions = tk.Frame(self.log_tab); log_actions.pack(pady=(8, 0))
         tk.Button(log_actions,text="Load shared Cloudflare R2 logs",command=self.load_logs).pack(side="left", padx=5)
         tk.Button(log_actions, text="Clear logs older than 30 days", command=self.clear_logs_older_than_30_days).pack(side="left", padx=5)
@@ -376,6 +377,31 @@ class App:
         self.word_block_text=scrolledtext.ScrolledText(f,width=70,height=16); self.word_block_text.pack(fill="both",expand=True,padx=30,pady=8)
         tk.Button(f,text="Save word block list to Cloudflare R2",command=self.save_word_blocks,width=34).pack(pady=(4,14))
 
+    def discipline_ui(self):
+        f=self.discipline_tab
+        tk.Label(f,text="Discipline — daily voice restriction (Bangladesh time)",font=("TkDefaultFont",12,"bold")).pack(pady=(22,8))
+        tk.Label(f,text="During the selected time, this member will be disconnected from voice and cannot stay connected. Rules repeat every day in Asia/Dhaka time and sync to Railway through Cloudflare.",wraplength=740,justify="center").pack(pady=(0,14))
+        form=tk.Frame(f); form.pack()
+        tk.Label(form,text="Server:").grid(row=0,column=0,padx=5,pady=5,sticky="e")
+        self.discipline_server=ttk.Combobox(form,state="readonly",width=46); self.discipline_server.grid(row=0,column=1,columnspan=7,padx=5,pady=5,sticky="w")
+        self.discipline_server.bind("<<ComboboxSelected>>",lambda event:self.refresh_discipline_users())
+        tk.Label(form,text="User ID:").grid(row=1,column=0,padx=5,pady=5,sticky="e")
+        self.discipline_user_id=tk.Entry(form,width=27); self.discipline_user_id.grid(row=1,column=1,padx=5,pady=5,sticky="w")
+        self.discipline_start=self.discipline_time_controls(form,2,"Restrict from:")
+        self.discipline_end=self.discipline_time_controls(form,3,"Allow again:")
+        row=tk.Frame(f); row.pack(pady=10)
+        tk.Button(row,text="Save / update rule",command=self.save_discipline_user,width=22).grid(row=0,column=0,padx=5)
+        tk.Button(row,text="Remove selected rule",command=self.remove_discipline_user,width=22).grid(row=0,column=1,padx=5)
+        self.discipline_users=tk.Listbox(f,height=10,exportselection=False,width=78); self.discipline_users.pack(padx=15,pady=8,fill="x")
+        self.discipline_users.bind("<<ListboxSelect>>",lambda event:self.select_discipline_user())
+
+    def discipline_time_controls(self, parent, row, label):
+        tk.Label(parent,text=label).grid(row=row,column=0,padx=5,pady=5,sticky="e")
+        hour=ttk.Combobox(parent,state="readonly",width=4,values=[str(x) for x in range(1,13)]); hour.set("12"); hour.grid(row=row,column=1,padx=2)
+        minute=ttk.Combobox(parent,state="readonly",width=4,values=[f"{x:02d}" for x in range(0,60)]); minute.set("00"); minute.grid(row=row,column=2,padx=2)
+        ampm=ttk.Combobox(parent,state="readonly",width=5,values=["AM","PM"]); ampm.set("AM"); ampm.grid(row=row,column=3,padx=2)
+        return (hour,minute,ampm)
+
     def voice_ui(self):
         f=self.voice_tab
         tk.Label(f,text="Temporary Voice Lobby",font=("TkDefaultFont", 12, "bold")).pack(pady=(28,8))
@@ -431,20 +457,21 @@ class App:
     def birthday_ui(self):
         f=self.birthday_tab; self.birthday_image_path=None
         tk.Label(f,text="Birthdays",font=("TkDefaultFont", 12, "bold")).pack(pady=(16,5))
-        tk.Label(f,text="The bot posts an [Birthday] Add Birthday button in the channel below. Members click it, enter day/month/year in a popup, and get a private confirmation. Clicking again later warns them before changing the saved date. On the day itself, the bot posts \"Happy Birthday @member\" with the wish text and image below.",wraplength=720,justify="center").pack(pady=(0,12))
+        tk.Label(f,text="Select a channel where members can submit their birthday and a separate channel for the bot's birthday wishes. Members enter day/month/year in a popup and get a private confirmation.",wraplength=720,justify="center").pack(pady=(0,12))
         form=tk.Frame(f); form.pack(fill="x",padx=25)
         tk.Label(form,text="Server:").grid(row=0,column=0,padx=5,pady=6,sticky="e")
         self.birthday_server=ttk.Combobox(form,state="readonly",width=48); self.birthday_server.grid(row=0,column=1,columnspan=2,padx=5,pady=6,sticky="w")
         self.birthday_server.bind("<<ComboboxSelected>>",lambda event:self.refresh_birthday_channels())
-        tk.Label(form,text="Birthday channel:").grid(row=1,column=0,padx=5,pady=6,sticky="e")
+        tk.Label(form,text="Birthday entry channel:").grid(row=1,column=0,padx=5,pady=6,sticky="e")
         self.birthday_channel=ttk.Combobox(form,state="readonly",width=48); self.birthday_channel.grid(row=1,column=1,columnspan=2,padx=5,pady=6,sticky="w")
-        tk.Label(form,text="Birthday role(s) to mention:").grid(row=2,column=0,padx=5,pady=6,sticky="ne")
-        self.birthday_roles=tk.Listbox(form,selectmode="multiple",height=5,exportselection=False,width=48); self.birthday_roles.grid(row=2,column=1,columnspan=2,padx=5,pady=6,sticky="w"); self.birthday_roles.bind("<<ListboxSelect>>",lambda event:self.update_role_summary(self.birthday_roles,self.birthday_role_summary))
-        self.birthday_role_summary=tk.Label(form,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=500,justify="left"); self.birthday_role_summary.grid(row=2,column=1,columnspan=2,padx=7,pady=(92,0),sticky="sw")
-        tk.Label(form,text="The same channel is used for the Add Birthday button and birthday wish.",wraplength=600,justify="left").grid(row=3,column=1,columnspan=2,padx=5,sticky="w")
-        tk.Button(form,text="Upload birthday image",command=self.choose_birthday_image).grid(row=3,column=0,padx=5,pady=6)
-        self.birthday_image_label=tk.Label(form,text="No new image selected (saved image is kept)",anchor="w"); self.birthday_image_label.grid(row=3,column=1,columnspan=2,padx=5,pady=6,sticky="w")
-        self.birthday_preview=tk.Label(form,text="No birthday image saved",anchor="w"); self.birthday_preview.grid(row=4,column=1,columnspan=2,padx=5,pady=(0,6),sticky="w")
+        tk.Label(form,text="Birthday wish channel:").grid(row=2,column=0,padx=5,pady=6,sticky="e")
+        self.birthday_wish_channel=ttk.Combobox(form,state="readonly",width=48); self.birthday_wish_channel.grid(row=2,column=1,columnspan=2,padx=5,pady=6,sticky="w")
+        tk.Label(form,text="Birthday role(s) to mention:").grid(row=3,column=0,padx=5,pady=6,sticky="ne")
+        self.birthday_roles=tk.Listbox(form,selectmode="multiple",height=5,exportselection=False,width=48); self.birthday_roles.grid(row=3,column=1,columnspan=2,padx=5,pady=6,sticky="w"); self.birthday_roles.bind("<<ListboxSelect>>",lambda event:self.update_role_summary(self.birthday_roles,self.birthday_role_summary))
+        self.birthday_role_summary=tk.Label(form,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=500,justify="left"); self.birthday_role_summary.grid(row=3,column=1,columnspan=2,padx=7,pady=(92,0),sticky="sw")
+        tk.Button(form,text="Upload birthday image",command=self.choose_birthday_image).grid(row=4,column=0,padx=5,pady=6)
+        self.birthday_image_label=tk.Label(form,text="No new image selected (saved image is kept)",anchor="w"); self.birthday_image_label.grid(row=4,column=1,columnspan=2,padx=5,pady=6,sticky="w")
+        self.birthday_preview=tk.Label(form,text="No birthday image saved",anchor="w"); self.birthday_preview.grid(row=5,column=1,columnspan=2,padx=5,pady=(0,6),sticky="w")
         tk.Button(f,text="Save birthday settings to Cloudflare R2",command=self.save_birthday_channel,width=38).pack(pady=18)
 
     def leveling_ui(self):
@@ -1341,7 +1368,8 @@ class App:
         if i<0:return
         guild_id=self.guilds[i][0]; channels=self.info.get(guild_id,{}).get("text_channels",[])
         values=[f"# {channel['name']} ({channel['id']})" for channel in channels]
-        self.birthday_channel["values"]=values
+        self.birthday_channel["values"]=values; self.birthday_wish_channel["values"]=values
+        self.birthday_channel.set(""); self.birthday_wish_channel.set("")
         config=self.settings.get("birthdays",{}).get(str(guild_id),{})
         self.birthday_roles.delete(0,tk.END)
         for index,role in enumerate(self.info.get(guild_id,{}).get("roles",[])):
@@ -1351,6 +1379,9 @@ class App:
         saved=str(config.get("channel_id",""))
         for index,channel in enumerate(channels):
             if channel["id"]==saved: self.birthday_channel.current(index); break
+        wish_saved=str(config.get("wish_channel_id") or saved)
+        for index,channel in enumerate(channels):
+            if channel["id"]==wish_saved: self.birthday_wish_channel.current(index); break
         self.load_birthday_preview(config.get("image_id",""))
 
     def show_birthday_preview(self, data=None, text=None):
@@ -1382,13 +1413,13 @@ class App:
         except Exception as exc: messagebox.showerror("Image error",f"Could not open this image: {exc}")
 
     def save_birthday_channel(self):
-        server_index,channel_index=self.birthday_server.current(),self.birthday_channel.current()
-        if server_index<0 or channel_index<0: return messagebox.showwarning("Birthday channel missing","Connect the GUI bot, then select a server and one text channel.")
+        server_index,channel_index,wish_channel_index=self.birthday_server.current(),self.birthday_channel.current(),self.birthday_wish_channel.current()
+        if server_index<0 or channel_index<0 or wish_channel_index<0: return messagebox.showwarning("Birthday channel missing","Connect the GUI bot, then select both birthday entry and wish text channels.")
         try:
             guild_id=str(self.guilds[server_index][0]); channels=self.info.get(self.guilds[server_index][0],{}).get("text_channels",[])
             existing=self.settings.get("birthdays",{}).get(guild_id,{})
             roles=self.info.get(self.guilds[server_index][0],{}).get("roles",[])
-            config={"channel_id":channels[channel_index]["id"],"role_ids":[roles[index]["id"] for index in self.birthday_roles.curselection()],"image_id":existing.get("image_id",""), "timezone":self.local_timezone}
+            config={"channel_id":channels[channel_index]["id"],"wish_channel_id":channels[wish_channel_index]["id"],"role_ids":[roles[index]["id"] for index in self.birthday_roles.curselection()],"image_id":existing.get("image_id",""), "timezone":self.local_timezone}
             if self.birthday_image_path:
                 content_type,data=self.prepare_greeting_image(self.birthday_image_path)
                 image_id=f"{guild_id}_birthday"
@@ -1522,6 +1553,59 @@ class App:
         if self.runtime: self.runtime.settings = self.settings
         self.refresh_monitored_users()
 
+    def refresh_discipline_users(self):
+        if not hasattr(self,"discipline_users") or self.discipline_server.current()<0:return
+        guild_id=str(self.guilds[self.discipline_server.current()][0])
+        self.discipline_users.delete(0,tk.END)
+        for user_id,rule in sorted(self.settings.get("discipline",{}).get(guild_id,{}).items()):
+            self.discipline_users.insert(tk.END,f"{user_id} | {self.format_discipline_time(rule.get('start',0))} – {self.format_discipline_time(rule.get('end',0))} BD time")
+
+    @staticmethod
+    def format_discipline_time(minutes):
+        hour,minute=divmod(int(minutes)%1440,60); suffix="AM" if hour<12 else "PM"
+        return f"{hour%12 or 12}:{minute:02d} {suffix}"
+
+    @staticmethod
+    def discipline_minutes(controls):
+        hour=int(controls[0].get())%12; minute=int(controls[1].get())
+        return hour*60+minute+(720 if controls[2].get()=="PM" else 0)
+
+    def save_discipline_user(self):
+        if self.discipline_server.current()<0:return messagebox.showwarning("Server missing","Select a server first.")
+        user_id=self.discipline_user_id.get().strip()
+        if not user_id.isdigit() or len(user_id)<15 or len(user_id)>22:return messagebox.showwarning("Invalid ID","Enter a valid numeric Discord user ID.")
+        start,end=self.discipline_minutes(self.discipline_start),self.discipline_minutes(self.discipline_end)
+        if start==end:return messagebox.showwarning("Invalid time","Start and end time must be different.")
+        guild_id=str(self.guilds[self.discipline_server.current()][0])
+        self.settings.setdefault("discipline",{}).setdefault(guild_id,{})[user_id]={"start":start,"end":end}
+        self.settings=self.store.save_settings(self.settings)
+        if self.runtime:self.runtime.settings=self.settings
+        self.refresh_discipline_users()
+        messagebox.showinfo("Saved","Discipline rule saved. Railway syncs it from Cloudflare within about 10 seconds.")
+
+    def select_discipline_user(self):
+        selected=self.discipline_users.curselection()
+        if not selected:return
+        user_id=self.discipline_users.get(selected[0]).split(" | ",1)[0]
+        guild_id=str(self.guilds[self.discipline_server.current()][0]); rule=self.settings.get("discipline",{}).get(guild_id,{}).get(user_id)
+        if not rule:return
+        self.discipline_user_id.delete(0,tk.END); self.discipline_user_id.insert(0,user_id)
+        self.set_discipline_controls(self.discipline_start,int(rule["start"])); self.set_discipline_controls(self.discipline_end,int(rule["end"]))
+
+    @staticmethod
+    def set_discipline_controls(controls, minutes):
+        hour,minute=divmod(int(minutes)%1440,60)
+        controls[0].set(str(hour%12 or 12)); controls[1].set(f"{minute:02d}"); controls[2].set("AM" if hour<12 else "PM")
+
+    def remove_discipline_user(self):
+        selected=self.discipline_users.curselection()
+        if not selected or self.discipline_server.current()<0:return messagebox.showwarning("Rule missing","Select a saved discipline rule first.")
+        user_id=self.discipline_users.get(selected[0]).split(" | ",1)[0]; guild_id=str(self.guilds[self.discipline_server.current()][0])
+        self.settings.setdefault("discipline",{}).setdefault(guild_id,{}).pop(user_id,None)
+        self.settings=self.store.save_settings(self.settings)
+        if self.runtime:self.runtime.settings=self.settings
+        self.refresh_discipline_users()
+
     def refresh_word_blocks(self):
         if not hasattr(self, "word_block_text") or self.word_block_server.current() < 0:
             return
@@ -1591,10 +1675,10 @@ class App:
                 kind,data=self.q.get_nowait()
                 if kind=="log": self.logs.config(state="normal"); self.logs.insert(tk.END,data+"\n"); self.logs.see(tk.END); self.logs.config(state="disabled")
                 elif kind=="guilds":
-                    self.guilds=data; values=[f"{name} ({gid})" for gid,name in data]; self.custom_server["values"]=values; self.chat_server["values"]=values; self.link_server["values"]=values; self.drag_server["values"]=values; self.mod_guild["values"]=values; self.ticket_server["values"]=values; self.voice_server["values"]=values; self.greeting_server["values"]=values; self.level_server["values"]=values; self.counting_server["values"]=values; self.birthday_server["values"]=values; self.notif_server["values"]=values; self.movie_server["values"]=values; self.default_role_server["values"]=values; self.activity_guild["values"]=values; self.word_block_server["values"]=values
-                    if data: self.custom_server.current(0); self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0); self.activity_guild.current(0)
+                    self.guilds=data; values=[f"{name} ({gid})" for gid,name in data]; self.custom_server["values"]=values; self.chat_server["values"]=values; self.link_server["values"]=values; self.drag_server["values"]=values; self.mod_guild["values"]=values; self.ticket_server["values"]=values; self.voice_server["values"]=values; self.greeting_server["values"]=values; self.level_server["values"]=values; self.counting_server["values"]=values; self.birthday_server["values"]=values; self.notif_server["values"]=values; self.movie_server["values"]=values; self.default_role_server["values"]=values; self.activity_guild["values"]=values; self.word_block_server["values"]=values; self.discipline_server["values"]=values
+                    if data: self.custom_server.current(0); self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0); self.activity_guild.current(0); self.discipline_server.current(0); self.refresh_discipline_users()
                     self.set_status("Connected")
-                elif kind=="guild": self.info[data["id"]]=data; self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_monitored_users(); self.refresh_word_blocks()
+                elif kind=="guild": self.info[data["id"]]=data; self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_monitored_users(); self.refresh_word_blocks(); self.refresh_discipline_users()
                 elif kind=="ticket_moderator_verified":
                     user_id = data["id"]
                     if user_id in self.ticket_moderator_ids:
