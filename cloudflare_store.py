@@ -196,6 +196,27 @@ class CloudflareR2Store:
     def list_tickets(self,limit=200): return [dict(v,document_id=i) for i,v,_ in sorted(self._list("tickets"),key=lambda x:x[1].get("created_at",""),reverse=True)[:limit]]
     def get_ticket(self,document_id):
         v=self._get("tickets",document_id); return dict(v,document_id=document_id) if v else None
+    def claim_ticket_escalation(self,document_id,stage):
+        fields={"15m":"staff_pinged_at","1h":"warning_sent_at"}
+        if stage not in fields: raise ValueError("Unknown ticket escalation stage.")
+        field=fields[stage]
+        def claim(ticket):
+            if not ticket or ticket.get("status")!="open" or ticket.get("staff_replied_at") or ticket.get(field): return False
+            ticket[field]=datetime.now(timezone.utc).isoformat(); self._put("tickets",document_id,ticket); return True
+        return self._atomic("tickets",document_id,claim,None)
+    def release_ticket_escalation(self,document_id,stage):
+        fields={"15m":"staff_pinged_at","1h":"warning_sent_at"}
+        if stage not in fields: raise ValueError("Unknown ticket escalation stage.")
+        def release(ticket):
+            if not ticket:return False
+            ticket.pop(fields[stage],None); self._put("tickets",document_id,ticket); return True
+        return self._atomic("tickets",document_id,release,None)
+    def mark_ticket_staff_reply(self,document_id,staff_id):
+        def mark(ticket):
+            if not ticket or ticket.get("status")!="open" or ticket.get("staff_replied_at"): return False
+            ticket.update({"staff_replied_at":datetime.now(timezone.utc).isoformat(),"first_staff_reply_id":str(staff_id)})
+            self._put("tickets",document_id,ticket); return True
+        return self._atomic("tickets",document_id,mark,None)
     def update_ticket_fields(self,document_id,updates):
         v=self._get("tickets",document_id)
         if not v: raise RuntimeError("Ticket no longer exists.")
@@ -215,6 +236,22 @@ class CloudflareR2Store:
         if str(v["user_id"])!=str(user_id): raise RuntimeError("Only the ticket owner can cancel this ticket.")
         if v.get("status")!="open": raise RuntimeError(f"This ticket is already {v.get('status')}.")
         v.update({"status":"cancelled","cancelled_at":datetime.now(timezone.utc).isoformat()}); self._put("tickets",document_id,v); return dict(v,document_id=document_id)
+    def get_ticket_review(self,document_id): return self._get("ticket_reviews",document_id)
+    def save_ticket_review(self,document_id,user_id,stars,note):
+        ticket=self.get_ticket(document_id)
+        if not ticket or ticket.get("status")!="closed": raise RuntimeError("Only a closed ticket can be rated.")
+        if str(ticket.get("user_id"))!=str(user_id): raise RuntimeError("Only the ticket owner can rate this ticket.")
+        stars=int(stars)
+        if not 1<=stars<=5: raise ValueError("Rating must be from 1 to 5 stars.")
+        review={"document_id":document_id,"ticket_id":str(ticket["ticket_id"]),"guild_id":str(ticket["guild_id"]),"user_id":str(user_id),"staff_id":str(ticket["assigned_moderator_id"]),"stars":stars,"note":str(note).strip()[:1000],"created_at":datetime.now(timezone.utc).isoformat()}
+        def save(current):
+            if current:return {"saved":False,"review":current}
+            self._put("ticket_reviews",document_id,review); return {"saved":True,"review":review}
+        return self._atomic("ticket_reviews",document_id,save,None)
+    def get_ticket_staff_rating(self,staff_id):
+        reviews=[review for _,review,_ in self._list("ticket_reviews") if str(review.get("staff_id"))==str(staff_id)]
+        total=sum(int(review.get("stars",0)) for review in reviews)
+        return {"reviews":len(reviews),"total_stars":total,"average":round(total/len(reviews),2) if reviews else 0.0}
     def save_ticket_dashboard(self,guild_id,channel_id,message_id): return self._save("ticket_dashboards",guild_id,{"channel_id":str(channel_id),"message_id":str(message_id)})
     def get_ticket_dashboard(self,guild_id): return self._simple("ticket_dashboards",guild_id)
     def save_birthday(self,guild_id,user_id,username,day,month,year): return self._save("birthdays",f"{guild_id}_{user_id}",{"guild_id":str(guild_id),"user_id":str(user_id),"username":username,"day":int(day),"month":int(month),"year":int(year) if year else None})

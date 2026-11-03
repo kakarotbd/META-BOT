@@ -82,6 +82,8 @@ XP lives in encrypted Cloudflare R2 and is awarded by a transaction, separately 
 
 Members can use **`/leaderboard`** in a server to get a 1920×1840 high-resolution PNG card of the top 10 by lifetime total XP. It includes each member's level and Discord avatar, plus the server name and icon. GUI and Railway read the same encrypted XP records, so the command uses the shared leveling data.
 
+Use **`/help`** in the server for a private, paginated English guide to member commands, channel buttons, voice rooms, leveling, birthdays, tickets, moderation features, and admin setup. The page controls are private to the member who opened the guide.
+
 ## Role notifications (scheduled role pings)
 
 In the GUI's **Role Notifications** tab, pick a server, then for each scheduled notification choose a text channel, one or more roles, a time of day in 12-hour format (e.g. `8:00 PM`), and an optional image. Add as many notifications as you like per server, each with its own channel/roles/time/message/image. Each schedule uses the local timezone detected by the GUI and stores it with the notification, so Railway runs it in that same timezone.
@@ -121,6 +123,8 @@ As soon as a ticket is created, the bot sends a full copy of it — user, catego
 - **Closed** opens pre-filled with a default English apology note ("Sorry for the inconvenience. This ticket has been closed…"); it can be edited or left as-is before submitting, and that text is sent to the ticket owner.
 
 Either action marks the ticket in encrypted Cloudflare R2, disables the buttons on the staff DM, and DMs the user with the note. The GUI's **Support Tokens** tab has matching **Mark selected ticket resolved + DM user** and **Close selected ticket + DM user** buttons that do exactly the same thing (the Close button also falls back to the same default apology note if the note field is left blank), so the same tickets can be handled from either the GUI or directly from Discord. All of it goes through the same encrypted Cloudflare R2 document and the same status-change guard (a ticket can only leave "open" once), so the GUI and Railway worker never conflict — whichever one is connected to Discord at the time delivers the staff DM and processes the buttons, and both read/write the identical ticket record. The Resolved/Closed buttons on the staff DM are also persistent, so they keep working even after a GUI restart or Railway redeploy.
+
+If an open ticket has no staff reply in its private channel after 15 minutes, the assigned moderator is mentioned there. After one hour, both the assigned moderator and ticket owner are mentioned with a warning. Reminders stop when a configured ticket moderator replies in the ticket channel. When staff choose **Closed**, the user receives a private 1–5 star rating prompt with optional written feedback; the review is sent to the assigned moderator's inbox. Ticket staff can DM the bot **`star`** to see their total star points, review count, and average rating. Ratings and reminder state use the same shared encrypted ticket store.
 
 ## Temporary voice rooms
 

@@ -496,6 +496,56 @@ class TicketStaffNoteModal(discord.ui.Modal):
         self.moderator.log(f"Ticket #{ticket['ticket_id']} marked {self.action} by {interaction.user} from Discord.")
 
 
+class TicketRatingView(discord.ui.View):
+    """Persistent private 1–5 star rating prompt sent to a closed ticket's owner."""
+    def __init__(self, moderator, ticket):
+        super().__init__(timeout=None)
+        self.moderator,self.ticket=moderator,dict(ticket)
+        for stars in range(1,6):
+            button=discord.ui.Button(label=f"{stars} Star" if stars==1 else f"{stars} Stars",style=discord.ButtonStyle.secondary,custom_id=f"ticket_rating:{ticket['document_id']}:{stars}")
+            button.callback=self.make_callback(stars)
+            self.add_item(button)
+
+    def make_callback(self,stars):
+        async def choose(interaction):
+            if str(interaction.user.id)!=str(self.ticket.get("user_id")):
+                return await interaction.response.send_message("Only the ticket owner can submit this rating.",ephemeral=True)
+            try:
+                existing=await asyncio.to_thread(self.moderator.store.get_ticket_review,self.ticket["document_id"])
+            except Exception as exc:
+                return await interaction.response.send_message("Could not check the review status. Please try again later.",ephemeral=True)
+            if existing:
+                return await interaction.response.send_message("A review has already been submitted for this ticket.",ephemeral=True)
+            await interaction.response.send_modal(TicketRatingModal(self.moderator,self.ticket,stars,interaction.message))
+        return choose
+
+
+class TicketRatingModal(discord.ui.Modal,title="Rate Your Support Experience"):
+    def __init__(self,moderator,ticket,stars,origin_message):
+        super().__init__()
+        self.moderator,self.ticket,self.stars,self.origin_message=moderator,ticket,stars,origin_message
+        self.note=discord.ui.TextInput(label="Optional feedback for the support team",style=discord.TextStyle.paragraph,max_length=1000,required=False,placeholder="Tell us how the support experience went.")
+        self.add_item(self.note)
+
+    async def on_submit(self,interaction):
+        try:
+            result=await asyncio.to_thread(self.moderator.store.save_ticket_review,self.ticket["document_id"],interaction.user.id,self.stars,self.note.value.strip())
+        except Exception as exc:
+            self.moderator.log(f"Could not save ticket #{self.ticket['ticket_id']} review: {exc}")
+            return await interaction.response.send_message("Your review could not be saved. Please try again later.",ephemeral=True)
+        if not result.get("saved"):
+            return await interaction.response.send_message("A review has already been submitted for this ticket.",ephemeral=True)
+        review=result["review"]
+        await interaction.response.send_message("Thank you. Your rating and feedback were sent to the support team.",ephemeral=True)
+        try:
+            await self.moderator.send_ticket_review_to_staff(self.ticket,review)
+        except Exception as exc:
+            self.moderator.log(f"Could not deliver ticket #{self.ticket['ticket_id']} review to staff: {exc}")
+        if self.origin_message:
+            try:await self.origin_message.edit(content=f"Thank you for rating support ticket **#{self.ticket['ticket_id']}** ({self.stars}/5 stars).",view=None)
+            except discord.HTTPException:pass
+
+
 class TempVoiceNameModal(discord.ui.Modal, title="Rename Temporary Voice Room"):
     def __init__(self, moderator, channel_id, current_name):
         super().__init__(); self.moderator, self.channel_id = moderator, channel_id
@@ -644,6 +694,98 @@ class DragTargetView(discord.ui.View):
             except (discord.Forbidden, discord.HTTPException): skipped += 1
         self.moderator.log(f"/drag by {interaction.user} in {self.guild.name}: moved {moved} member(s) to {target.name}; skipped {skipped}.")
         await interaction.followup.send(f"Moved **{moved}** member(s) to {target.mention}. Skipped: **{skipped}**.", ephemeral=True)
+
+
+HELP_PAGES = [
+    ("QUICK START", "Welcome to the server bot guide. Use the buttons below to browse each feature.", [
+        ("Commands", "Run **`/leaderboard`** to see the top 10 members by lifetime XP in a high-resolution image. Server-specific GIF commands appear in Discord's slash-command menu; choose a member when prompted."),
+        ("Channel buttons", "Use the **Create Ticket** button to contact support and the **Add Birthday** button to submit your birthday privately. These buttons are posted in channels selected by the server team."),
+        ("Server setup", "Most features are configured by server admins in the desktop control panel. If a button or command is missing, ask an admin whether it has been enabled and configured."),
+    ]),
+    ("LEVELS & LEADERBOARD", "Earn XP through meaningful server activity and climb the shared server ranking.", [
+        ("Text XP", "Eligible messages earn XP after the cooldown. Very short messages and repeated rapid messages do not count. Longer meaningful messages can earn a small bonus."),
+        ("Voice XP", "Voice XP is earned on its own timer. By default, another non-bot member must be in the channel, and deafened members are skipped to discourage idle farming."),
+        ("Leaderboard", "Use **`/leaderboard`** for the top 10 by total lifetime XP. The image shows each member's level and profile picture, plus the server logo. Leveling settings are managed by admins."),
+    ]),
+    ("SUPPORT, BIRTHDAYS & COMMUNITY", "Use the persistent channel buttons and configured community channels.", [
+        ("Support tickets", "Click **Create Ticket**, choose a category, describe the issue, and confirm. Your ticket is sent privately to the support team. Use the cancellation button in your confirmation if you no longer need help."),
+        ("Birthdays", "Click **Add Birthday**, enter day/month/year, and submit. The confirmation is private. If you already have a birthday saved, the bot asks before changing it. Birthday wishes are posted in the channel chosen by admins."),
+        ("Counting & greetings", "In the configured counting channel, post the next number in order. Welcome and goodbye messages are sent automatically when members join or leave."),
+        ("Auto roles", "New members receive the roles selected by server admins automatically. Members do not need to run a command."),
+    ]),
+    ("VOICE & SCHEDULED POSTS", "Voice rooms and announcements follow the schedule and channels selected by admins.", [
+        ("Temporary voice rooms", "Join the configured voice lobby to create your own temporary room. Use its room controls to lock/unlock it, rename it, set a member limit, or invite someone. Empty temporary rooms are removed automatically."),
+        ("Discipline", "Admins can set a daily Bangladesh-time voice restriction for a specific member. During that time, the bot disconnects them if they join voice; after the end time, they can join again."),
+        ("Announcements", "Movie posts and role notifications are sent automatically to their configured channels and schedules. Some schedules repeat by day or weekday; one-time movie announcements fire once."),
+    ]),
+    ("SAFETY & MEMBER ACTIVITY", "The bot applies the server's saved moderation rules and provides limited activity history.", [
+        ("Link and word rules", "Only configured roles may post links where link filtering is enabled. Configured blocked words are removed and logged; repeated blocked-word violations can lead to an automatic permanent ban."),
+        ("Member activity", "Admins can save a member as a monitoring target and review up to 24 hours of available server messages, deleted messages, joins/leaves, and voice join/leave times. The bot does not capture VC audio or private DM content."),
+        ("Moderation controls", "Server admins manage warning thresholds, timeout settings, protected accounts, and manual moderation actions through the desktop control panel."),
+    ]),
+    ("ADMIN SETUP & SYNC", "The desktop panel configures features; Railway keeps the shared bot online.", [
+        ("Configure", "Connect the desktop control panel, choose a server, open the relevant settings tab, and save. Discord permissions and role hierarchy may limit which actions the bot can perform."),
+        ("Railway", "The Railway worker runs the bot continuously. Saved configuration and leveling data are shared through the configured Cloudflare database and normally synchronize within about 10 seconds."),
+        ("Need help?", "If a feature is unavailable, contact a server admin. They can check the channel configuration, role permissions, bot permissions, and Railway status."),
+    ]),
+]
+
+
+def make_help_embeds(guild):
+    embeds=[]
+    for index,(title,description,fields) in enumerate(HELP_PAGES):
+        embed=discord.Embed(title=title,description=description,colour=discord.Colour.from_rgb(18,28,46))
+        if guild and guild.icon:
+            embed.set_author(name=f"{guild.name}  •  BOT GUIDE",icon_url=str(guild.icon.url))
+            embed.set_thumbnail(url=str(guild.icon.url))
+        elif guild:
+            embed.set_author(name=f"{guild.name}  •  BOT GUIDE")
+        for name,value in fields:
+            embed.add_field(name=name,value=value,inline=False)
+        embed.set_footer(text=f"Page {index+1} of {len(HELP_PAGES)}  •  Browse with the buttons below")
+        embeds.append(embed)
+    return embeds
+
+
+class HelpPagerView(discord.ui.View):
+    """Private, requester-only pagination for the English bot guide."""
+    def __init__(self, owner_id, embeds):
+        super().__init__(timeout=300)
+        self.owner_id,self.embeds,self.page=owner_id,embeds,0
+        self.message=None
+        self._sync_buttons()
+
+    def _sync_buttons(self):
+        self.previous_button.disabled=self.page==0
+        self.next_button.disabled=self.page>=len(self.embeds)-1
+
+    async def interaction_check(self,interaction):
+        if interaction.user.id==self.owner_id:return True
+        await interaction.response.send_message("Only the member who opened this help guide can use these buttons.",ephemeral=True)
+        return False
+
+    @discord.ui.button(label="Previous",emoji="◀️",style=discord.ButtonStyle.secondary)
+    async def previous_button(self,interaction,button):
+        self.page=max(0,self.page-1); self._sync_buttons()
+        await interaction.response.edit_message(embed=self.embeds[self.page],view=self)
+
+    @discord.ui.button(label="Close",emoji="✖️",style=discord.ButtonStyle.danger)
+    async def close_button(self,interaction,button):
+        self.stop()
+        await interaction.response.edit_message(content="Help guide closed.",embed=None,view=None)
+
+    @discord.ui.button(label="Next",emoji="▶️",style=discord.ButtonStyle.primary)
+    async def next_button(self,interaction,button):
+        self.page=min(len(self.embeds)-1,self.page+1); self._sync_buttons()
+        await interaction.response.edit_message(embed=self.embeds[self.page],view=self)
+
+    async def on_timeout(self):
+        for item in self.children:
+            if isinstance(item,discord.ui.Button):item.disabled=True
+        if self.message:
+            try:await self.message.edit(view=self)
+            except discord.HTTPException:pass
+
 class ModeratorBot:
     """The single moderation implementation shared by GUI and Railway."""
     def __init__(self, store, source, log=print, event=None):
@@ -654,6 +796,7 @@ class ModeratorBot:
         self.loop = None
         self.last_action, self.actions = {}, []
         self.counting_locks = {}
+        self.open_ticket_channels = {}
         self.dashboard_views_registered = set()
         # `on_ready` may be called again after a Discord gateway resume. The
         # GUI inventory should be refreshed each time, but background loops must
@@ -1591,6 +1734,53 @@ class ModeratorBot:
                 except (discord.Forbidden, discord.NotFound) as exc:
                     self.log(f"Could not remove temporary voice room: {exc}")
 
+    async def ticket_escalation_tick(self):
+        """Remind assigned staff after 15 minutes and warn both parties after 1 hour."""
+        while not self.bot.is_closed():
+            await asyncio.sleep(30)
+            try:
+                tickets=await asyncio.to_thread(self.store.list_tickets,500)
+                now=datetime.now(timezone.utc)
+                for ticket in tickets:
+                    if ticket.get("status")!="open" or ticket.get("staff_replied_at"):
+                        continue
+                    try:
+                        created=datetime.fromisoformat(str(ticket["created_at"]).replace("Z","+00:00"))
+                        if created.tzinfo is None:created=created.replace(tzinfo=timezone.utc)
+                    except (KeyError,TypeError,ValueError):
+                        continue
+                    age=(now-created.astimezone(timezone.utc)).total_seconds()
+                    if age<900:continue
+                    guild=self.bot.get_guild(int(ticket["guild_id"]))
+                    channel=guild.get_channel(int(ticket.get("ticket_channel_id",""))) if guild and str(ticket.get("ticket_channel_id","")).isdigit() else None
+                    if not isinstance(channel,(discord.TextChannel,discord.Thread)):
+                        continue
+                    stages=[]
+                    if age>=900:stages.append("15m")
+                    if age>=3600:stages.append("1h")
+                    for stage in stages:
+                        try:
+                            claimed=await asyncio.to_thread(self.store.claim_ticket_escalation,ticket["document_id"],stage)
+                            if not claimed:continue
+                            staff_id=str(ticket.get("assigned_moderator_id",""))
+                            user_id=str(ticket.get("user_id",""))
+                            if stage=="15m":
+                                content=f"<@{staff_id}> **Ticket #{ticket['ticket_id']} has been waiting for 15 minutes without a staff reply.** Please respond when available."
+                                allowed=discord.AllowedMentions(users=[discord.Object(id=int(staff_id))] if staff_id.isdigit() else [],roles=False,everyone=False)
+                                await channel.send(content,allowed_mentions=allowed)
+                                self.log(f"Sent 15-minute unanswered-ticket reminder for #{ticket['ticket_id']}.")
+                            else:
+                                mentions=[discord.Object(id=int(value)) for value in (staff_id,user_id) if value.isdigit()]
+                                content=f"<@{staff_id}> <@{user_id}> **Warning: ticket #{ticket['ticket_id']} has been open for over 1 hour without a staff reply.** The assigned moderator should respond as soon as possible."
+                                await channel.send(content,allowed_mentions=discord.AllowedMentions(users=mentions,roles=False,everyone=False))
+                                self.log(f"Sent 1-hour ticket warning to staff and owner for #{ticket['ticket_id']}.")
+                        except Exception as exc:
+                            try:await asyncio.to_thread(self.store.release_ticket_escalation,ticket["document_id"],stage)
+                            except Exception:pass
+                            self.log(f"Could not send {stage} reminder for ticket #{ticket.get('ticket_id')}: {exc}")
+            except Exception as exc:
+                self.log(f"Ticket escalation check failed: {exc}")
+
     async def ensure_ticket_dashboards(self):
         """Post (or move) the persistent 'Create Ticket' button in each configured ticket channel."""
         for guild_id, channel_id in self.settings.get("ticket_channels", {}).items():
@@ -1743,6 +1933,7 @@ class ModeratorBot:
                 self.background_tasks_started = True
                 asyncio.create_task(self.refresh_settings())
                 asyncio.create_task(self.discipline_tick())
+                asyncio.create_task(self.ticket_escalation_tick())
                 asyncio.create_task(self.restore_temp_voice_dashboards())
                 # Railway is the sole voice-XP scheduler; it shares Cloudflare R2 state
                 # with the GUI without creating duplicate transaction writers.
@@ -1813,8 +2004,38 @@ class ModeratorBot:
 
         @bot.event
         async def on_message(message):
-            if message.author.bot or not message.guild:
+            if message.author.bot:
                 return await bot.process_commands(message)
+            if not message.guild:
+                if message.content.strip().casefold() in {"star", "start"}:
+                    staff_ids={str(APP_CONFIG.admin_user_id),*map(str,TICKET_CHANNEL_STAFF_IDS)}
+                    for configured in self.settings.get("ticket_moderators",{}).values():
+                        staff_ids.update(map(str,configured))
+                    if str(message.author.id) not in staff_ids:
+                        return await message.channel.send("This staff summary is only available to configured ticket staff.")
+                    try:
+                        rating=await asyncio.to_thread(self.store.get_ticket_staff_rating,message.author.id)
+                    except Exception as exc:
+                        self.log(f"Could not load ticket rating summary for staff {message.author.id}: {exc}")
+                        return await message.channel.send("Could not load your rating summary right now. Please try again later.")
+                    embed=discord.Embed(title="Your Support Rating Summary",description="Ratings submitted by users after their tickets were closed.",colour=discord.Colour.gold())
+                    embed.add_field(name="Total star points",value=f"**{rating['total_stars']}**",inline=True)
+                    embed.add_field(name="Reviews",value=f"**{rating['reviews']}**",inline=True)
+                    embed.add_field(name="Average",value=f"**{rating['average']:.2f} / 5**",inline=True)
+                    return await message.channel.send(embed=embed)
+                return await bot.process_commands(message)
+            ticket=self.open_ticket_channels.get(str(message.channel.id))
+            if ticket and str(message.author.id)!=str(ticket.get("user_id")):
+                staff_ids={str(ticket.get("assigned_moderator_id","")),*map(str,TICKET_CHANNEL_STAFF_IDS)}
+                staff_ids.update(map(str,self.settings.get("ticket_moderators",{}).get(str(message.guild.id),[])))
+                if str(message.author.id) in staff_ids:
+                    try:
+                        marked=await asyncio.to_thread(self.store.mark_ticket_staff_reply,ticket["document_id"],message.author.id)
+                        if marked:
+                            ticket["staff_replied_at"]=datetime.now(timezone.utc).isoformat()
+                            self.log(f"Staff reply received on ticket #{ticket['ticket_id']}; unanswered-ticket reminders stopped.")
+                    except Exception as exc:
+                        self.log(f"Could not mark staff reply on ticket #{ticket['ticket_id']}: {exc}")
             asyncio.create_task(asyncio.to_thread(self.store.record_member_activity, message.guild.id, message.author.id, str(message.author), "message", {"channel": getattr(message.channel, "name", "unknown"), "content": message.content[:1000]}, f"message_{message.id}"))
             if await self.handle_word_block(message):
                 return
@@ -1851,6 +2072,16 @@ class ModeratorBot:
             if not isinstance(interaction.channel, (discord.TextChannel, discord.Thread)):
                 return await interaction.response.send_message("Use /chat in a text channel or thread.", ephemeral=True)
             await interaction.response.send_modal(ChatSendModal(self))
+
+        @bot.tree.command(name="help", description="Browse the English guide to the bot's features")
+        @app_commands.guild_only()
+        async def help_command(interaction: discord.Interaction):
+            view=HelpPagerView(interaction.user.id,make_help_embeds(interaction.guild))
+            await interaction.response.send_message(embed=view.embeds[0],view=view,ephemeral=True)
+            try:
+                view.message=await interaction.original_response()
+            except discord.HTTPException:
+                pass
 
         @bot.tree.command(name="leaderboard", description="Show the server's top 10 members by total leveling XP")
         @app_commands.guild_only()
@@ -1936,6 +2167,7 @@ class ModeratorBot:
             allowed_mentions=discord.AllowedMentions.none(),
         )
         ticket = await asyncio.to_thread(self.store.update_ticket_fields, ticket["document_id"], {"ticket_channel_id": str(channel.id)})
+        self.open_ticket_channels[str(channel.id)]=dict(ticket)
         self.log(f"Created private chat #{channel.name} for ticket #{ticket['ticket_id']} in {guild.name}.")
         return channel
 
@@ -1949,6 +2181,7 @@ class ModeratorBot:
             self.log(f"Could not delete ticket #{ticket.get('ticket_id')}'s chat: guild is unavailable.")
             return
         channel = guild.get_channel(int(channel_id))
+        self.open_ticket_channels.pop(channel_id,None)
         if not channel:
             try:
                 channel = await self.bot.fetch_channel(int(channel_id))
@@ -1994,17 +2227,25 @@ class ModeratorBot:
         except Exception as exc:
             self.log(f"Could not save the ticket's staff DM reference: {exc}")
     async def restore_ticket_staff_dashboards(self):
-        """Re-register the persistent Resolved/Closed buttons on open tickets after a restart."""
+        """Restore persistent staff controls, rating prompts, and open ticket tracking."""
         try:
             tickets = await asyncio.to_thread(self.store.list_tickets, 500)
-            restored = 0
+            restored = 0; restored_ratings=0
             for ticket in tickets:
-                if ticket.get("status") != "open" or not ticket.get("staff_dm_message_id"):
-                    continue
-                self.bot.add_view(TicketStaffActionView(self, ticket), message_id=int(ticket["staff_dm_message_id"]))
-                restored += 1
+                if ticket.get("status")=="open":
+                    channel_id=str(ticket.get("ticket_channel_id",""))
+                    if channel_id:self.open_ticket_channels[channel_id]=dict(ticket)
+                    if ticket.get("staff_dm_message_id"):
+                        self.bot.add_view(TicketStaffActionView(self, ticket), message_id=int(ticket["staff_dm_message_id"]))
+                        restored += 1
+                elif ticket.get("status")=="closed" and ticket.get("rating_message_id"):
+                    review=await asyncio.to_thread(self.store.get_ticket_review,ticket["document_id"])
+                    if not review:
+                        self.bot.add_view(TicketRatingView(self,ticket),message_id=int(ticket["rating_message_id"]))
+                        restored_ratings+=1
             if restored:
                 self.log(f"Restored {restored} ticket staff dashboard button(s).")
+            if restored_ratings:self.log(f"Restored {restored_ratings} ticket rating prompt(s).")
         except Exception as exc:
             self.log(f"Ticket staff dashboard restore failed: {exc}")
 
@@ -2014,9 +2255,33 @@ class ModeratorBot:
         if ticket["status"] == "resolved":
             await user.send(f"Your support ticket **#{ticket['ticket_id']}** has been resolved. Note: {note}")
         elif ticket["status"] == "closed":
-            await user.send(f"Your support ticket **#{ticket['ticket_id']}** has been closed.\n\n{note}")
+            message=await user.send(
+                f"Your support ticket **#{ticket['ticket_id']}** has been closed.\n\n{note}\n\n"
+                "Please rate your support experience below. Your rating and optional feedback will be sent to the assigned support moderator.",
+                view=TicketRatingView(self,ticket),
+            )
+            await asyncio.to_thread(self.store.update_ticket_fields,ticket["document_id"],{"rating_message_id":str(message.id)})
         else:
             await user.send(f"Your support ticket **#{ticket['ticket_id']}** status changed to **{ticket['status']}**. Note: {note}")
+
+    async def send_ticket_review_to_staff(self,ticket,review):
+        staff_id=str(review.get("staff_id") or ticket.get("assigned_moderator_id") or "")
+        if not staff_id.isdigit():
+            self.log(f"Ticket #{ticket.get('ticket_id')} has no valid assigned moderator for review delivery.")
+            return False
+        staff=self.bot.get_user(int(staff_id))
+        if not staff:
+            try:staff=await self.bot.fetch_user(int(staff_id))
+            except discord.HTTPException as exc:
+                self.log(f"Could not find ticket staff member {staff_id} for review delivery: {exc}"); return False
+        stars=int(review.get("stars",0))
+        embed=discord.Embed(title=f"Ticket Review • #{ticket.get('ticket_id')}",description=f"**Rating:** {'⭐' * stars}{'☆' * (5-stars)}  (**{stars}/5**)",colour=discord.Colour.gold())
+        embed.add_field(name="From",value=f"{ticket.get('username','User')} (`{review.get('user_id')}`)",inline=False)
+        embed.add_field(name="Feedback",value=str(review.get("note") or "No written feedback provided.")[:1000],inline=False)
+        embed.set_footer(text="Type star in this DM to view your total rating points.")
+        await staff.send(embed=embed)
+        self.log(f"Delivered {stars}-star review for ticket #{ticket.get('ticket_id')} to assigned staff {staff_id}.")
+        return True
 
     async def notify_ticket_resolved(self, ticket):
         """Backward-compatible alias for notify_ticket_status."""
