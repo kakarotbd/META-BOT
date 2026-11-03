@@ -546,20 +546,20 @@ class ModeratorBot:
         # only exist once or a reconnect would create duplicate workers.
         self.background_tasks_started = False
 
-    async def track_member_voice_activity(self, member, before, after):
+    async def track_member_voice_activity(self, member, before_channel, after_channel):
         """Record voice joins, moves, leaves, and time spent in this server only."""
-        if member.bot or before.channel == after.channel:
+        if member.bot or before_channel == after_channel:
             return
-        if before.channel:
+        if before_channel:
             session = await asyncio.to_thread(self.store.end_member_voice_session, member.guild.id, member.id)
             if session:
                 started = datetime.fromisoformat(session["started_at"])
                 duration = max(0, round((datetime.now(timezone.utc) - started).total_seconds()))
-                await asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "voice_left", {"channel": session.get("channel_name", before.channel.name), "duration_seconds": duration})
-        if after.channel:
-            started = await asyncio.to_thread(self.store.start_member_voice_session, member.guild.id, member.id, str(member), after.channel.name)
+                await asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "voice_left", {"channel": session.get("channel_name", before_channel.name), "duration_seconds": duration})
+        if after_channel:
+            started = await asyncio.to_thread(self.store.start_member_voice_session, member.guild.id, member.id, str(member), after_channel.name)
             if started:
-                await asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "voice_joined", {"channel": after.channel.name})
+                await asyncio.to_thread(self.store.record_member_activity, member.guild.id, member.id, str(member), "voice_joined", {"channel": after_channel.name})
 
     def discipline_restricted(self, guild_id, user_id, now=None):
         """Whether a member is inside their recurring Bangladesh-time voice restriction."""
@@ -1663,7 +1663,10 @@ class ModeratorBot:
         @bot.event
         async def on_voice_state_update(member, before, after):
             # Keep R2 activity logging off the critical temporary-room path.
-            asyncio.create_task(self.track_member_voice_activity(member, before, after))
+            # Capture channel objects before awaiting enforcement: Discipline may
+            # disconnect the member immediately, while the activity task is queued.
+            before_channel, after_channel = before.channel, after.channel
+            asyncio.create_task(self.track_member_voice_activity(member, before_channel, after_channel))
             if after.channel:
                 if await self.enforce_discipline(member):
                     return
