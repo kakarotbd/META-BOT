@@ -1,10 +1,14 @@
 import asyncio
+import concurrent.futures
 import functools
 import io
+import os
 import re
 import re
 import time
+import urllib.request
 from datetime import datetime, timedelta, timezone
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 from zoneinfo import ZoneInfo
 
 import discord
@@ -39,6 +43,94 @@ def image_extension(content_type, data=None):
         "image/png": "png",
         "image/webp": "webp",
     }.get((content_type or "").lower(), "jpg")
+
+
+def _leaderboard_font(size, bold=False):
+    candidates = ([r"C:\Windows\Fonts\seguisb.ttf", r"C:\Windows\Fonts\segoeui.ttf"] if bold else [r"C:\Windows\Fonts\segoeui.ttf"])
+    candidates += (["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"] if bold else ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"])
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _fetch_leaderboard_image(url):
+    if not url:
+        return None
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "META-BOT-Leaderboard/1.0"})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            data = response.read(8 * 1024 * 1024 + 1)
+        if len(data) > 8 * 1024 * 1024:
+            return None
+        with Image.open(io.BytesIO(data)) as image:
+            return image.convert("RGBA")
+    except Exception:
+        return None
+
+
+def render_leaderboard_png(guild_name, icon_url, entries):
+    """Render the top ten lifetime-XP users into a polished Discord PNG card."""
+    width, height = 1200, 820
+    background = Image.new("RGB", (width, height), "#0b1020")
+    pixels = background.load()
+    for y in range(height):
+        ratio = y / height
+        color = (int(17 - ratio * 5), int(26 - ratio * 7), int(48 - ratio * 8))
+        for x in range(width):
+            pixels[x, y] = color
+    image = background.convert("RGBA")
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((28, 26, width-28, height-26), radius=28, fill="#10192b", outline="#293756", width=2)
+    draw.rounded_rectangle((48, 46, width-48, 205), radius=24, fill="#17243b")
+    draw.ellipse((48, 46, 220, 218), fill="#6d5dfc")
+    draw.ellipse((79, 77, 190, 188), fill="#293c64")
+    draw.text((270, 74), "LEVEL LEADERBOARD", font=_leaderboard_font(19, True), fill="#a8b8d8")
+    draw.text((270, 108), str(guild_name)[:38], font=_leaderboard_font(39, True), fill="#f5f7ff")
+    draw.text((270, 164), "TOP 10  •  RANKED BY TOTAL XP", font=_leaderboard_font(16, True), fill="#8ea3ca")
+    images = [icon_url] + [entry.get("avatar_url") for entry in entries]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        fetched = list(pool.map(_fetch_leaderboard_image, images))
+    if fetched and fetched[0]:
+        icon = ImageOps.fit(fetched[0], (132, 132), centering=(0.5, 0.5))
+        mask = Image.new("L", (132,132), 0); ImageDraw.Draw(mask).ellipse((0,0,131,131), fill=255)
+        image.paste(icon, (59,59), mask)
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((56,56,194,194), outline="#cbd7ff", width=4)
+    body_font = _leaderboard_font(21)
+    small_font = _leaderboard_font(16)
+    bold_font = _leaderboard_font(22, True)
+    rank_colors = ["#f3c969", "#c8d3e8", "#d89468"]
+    row_start, row_height = 226, 54
+    for index, entry in enumerate(entries[:10]):
+        y = row_start + index * row_height
+        fill = "#1b2941" if index % 2 == 0 else "#162238"
+        draw.rounded_rectangle((54,y,width-54,y+46), radius=15, fill=fill)
+        rank_color = rank_colors[index] if index < 3 else "#8798b9"
+        draw.ellipse((65,y+5,101,y+41), fill="#293750")
+        rank_text = str(index+1)
+        rank_box = draw.textbbox((0,0),rank_text,font=bold_font)
+        draw.text((83-(rank_box[2]-rank_box[0])/2,y+12),rank_text,font=bold_font,fill=rank_color)
+        avatar = fetched[index+1] if index+1 < len(fetched) else None
+        if avatar:
+            avatar = ImageOps.fit(avatar,(38,38),centering=(0.5,0.5))
+            mask = Image.new("L",(38,38),0); ImageDraw.Draw(mask).ellipse((0,0,37,37),fill=255)
+            image.paste(avatar,(116,y+4),mask)
+        else:
+            draw.ellipse((116,y+4,154,y+42),fill="#344866")
+            initials = (entry.get("name") or "?").strip()[:1].upper()
+            draw.text((127,y+10),initials,font=small_font,fill="#dce6ff")
+        draw.text((170,y+7),(entry.get("name") or "Unknown member")[:28],font=body_font,fill="#f2f5ff")
+        draw.text((171,y+29),f"LEVEL {int(entry.get('level',1)):,}",font=small_font,fill="#91a5cd")
+        total_text=f"{int(entry.get('total_xp',0)):,} XP"
+        text_box=draw.textbbox((0,0),total_text,font=bold_font)
+        draw.text((width-78-(text_box[2]-text_box[0]),y+12),total_text,font=bold_font,fill="#a78bfa")
+    draw.text((58,height-59),"Keep earning XP to climb the ranks",font=small_font,fill="#7488ae")
+    output=io.BytesIO(); image.convert("RGB").save(output,format="PNG",optimize=True)
+    output.seek(0)
+    return output
 
 
 def format_birthday(record):
@@ -1737,6 +1829,36 @@ class ModeratorBot:
             if not isinstance(interaction.channel, (discord.TextChannel, discord.Thread)):
                 return await interaction.response.send_message("Use /chat in a text channel or thread.", ephemeral=True)
             await interaction.response.send_modal(ChatSendModal(self))
+
+        @bot.tree.command(name="leaderboard", description="Show the server's top 10 members by total leveling XP")
+        @app_commands.guild_only()
+        async def leaderboard(interaction: discord.Interaction):
+            await interaction.response.defer(thinking=True)
+            try:
+                records = await asyncio.to_thread(self.store.top_activity_users, interaction.guild.id, 10)
+                if not records:
+                    return await interaction.followup.send("Leveling leaderboard-e ekhono kono XP record nei.", ephemeral=True)
+                entries = []
+                for record in records:
+                    member_id = str(record.get("user_id", ""))
+                    member = interaction.guild.get_member(int(member_id)) if member_id.isdigit() else None
+                    entries.append({
+                        "name": member.display_name if member else str(record.get("username") or "Unknown member"),
+                        "avatar_url": str(member.display_avatar.url) if member else str(record.get("avatar_url") or ""),
+                        "level": int(record.get("level", 1)),
+                        "total_xp": int(record.get("total_xp", 0)),
+                    })
+                png = await asyncio.to_thread(
+                    render_leaderboard_png,
+                    interaction.guild.name,
+                    str(interaction.guild.icon.url) if interaction.guild.icon else "",
+                    entries,
+                )
+                file = discord.File(png, filename="level-leaderboard.png")
+                await interaction.followup.send(file=file)
+            except Exception as exc:
+                self.log(f"Could not create leveling leaderboard for {interaction.guild.name}: {exc}")
+                await interaction.followup.send("Leaderboard generate korte problem hoyeche. Ektu pore abar try koro.", ephemeral=True)
 
         @bot.tree.command(name="move", description="Select voice members and move them to another voice channel")
         @app_commands.guild_only()

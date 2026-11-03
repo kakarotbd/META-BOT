@@ -80,6 +80,8 @@ In the GUI's **Leveling** tab, choose a server and the text channel where level-
 
 XP lives in encrypted Cloudflare R2 and is awarded by a transaction, separately keyed per activity source (text vs. voice). This means the desktop GUI and Railway worker use the same XP, cooldown, and level record for both sources; even if they briefly overlap, one cooldown window for one source can only be claimed once, so leveling stays 100% consistent between the GUI and Railway. Configure with the GUI, then keep one gateway worker (normally Railway) online — the voice XP check runs automatically as part of that same worker, every 15 seconds, with no extra setup.
 
+Members can use **`/leaderboard`** in a server to get a PNG card of the top 10 by lifetime total XP. It includes each member's level and Discord avatar, plus the server name and icon. GUI and Railway read the same encrypted XP records, so the command uses the shared leveling data.
+
 ## Role notifications (scheduled role pings)
 
 In the GUI's **Role Notifications** tab, pick a server, then for each scheduled notification choose a text channel, one or more roles, a time of day in 12-hour format (e.g. `8:00 PM`), and an optional image. Add as many notifications as you like per server, each with its own channel/roles/time/message/image. Each schedule uses the local timezone detected by the GUI and stores it with the notification, so Railway runs it in that same timezone.
