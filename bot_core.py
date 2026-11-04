@@ -357,17 +357,19 @@ class BirthdayDashboardView(discord.ui.View):
         configured_channel = self.moderator.settings.get("birthdays", {}).get(str(interaction.guild.id), {}).get("channel_id")
         if not configured_channel or str(interaction.channel_id) != str(configured_channel):
             return await interaction.response.send_message("Setting a birthday is not available in this channel anymore.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             existing = await asyncio.to_thread(self.moderator.store.get_birthday, interaction.guild.id, interaction.user.id)
         except Exception as exc:
-            return await interaction.response.send_message(f"Could not check your saved birthday: {exc}", ephemeral=True)
+            self.moderator.log(f"Could not check saved birthday for {interaction.user}: {exc}")
+            return await interaction.followup.send("Could not check your saved birthday. Please try again in a moment.", ephemeral=True)
         if existing:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 f"You already have a birthday saved: **{format_birthday(existing)}**. Do you want to change it?",
                 view=BirthdayChangeConfirmView(self.moderator, interaction.guild.id, interaction.user.id),
                 ephemeral=True,
             )
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "Select your birth month and day, then enter the year.",
             view=BirthdayDatePickerView(self.moderator, interaction.guild.id, interaction.user.id),
             ephemeral=True,
@@ -392,11 +394,12 @@ class BirthdayDatePickerView(discord.ui.View):
         self.month_select.callback = self.choose_month
         self.day_group_select = discord.ui.Select(
             placeholder="Choose day range",
-            options=[discord.SelectOption(label=f"Days {start}–{min(start + (10 if start == 21 else 9), 31)}", value=str(start)) for start in (1, 11, 21)],
+            options=[discord.SelectOption(label=f"Days {start}-{min(start + (10 if start == 21 else 9), 31)}", value=str(start)) for start in (1, 11, 21)],
             row=1,
+            disabled=True,
         )
         self.day_group_select.callback = self.choose_day_group
-        self.day_select = discord.ui.Select(placeholder="Choose a day", options=[discord.SelectOption(label=str(day), value=str(day)) for day in range(1, 11)], row=2)
+        self.day_select = discord.ui.Select(placeholder="Choose a day", options=[discord.SelectOption(label=str(day), value=str(day)) for day in range(1, 11)], row=2, disabled=True)
         self.day_select.callback = self.choose_day
         self.add_item(self.month_select)
         self.add_item(self.day_group_select)
@@ -414,6 +417,8 @@ class BirthdayDatePickerView(discord.ui.View):
     async def choose_month(self, interaction):
         self.month = int(self.month_select.values[0])
         self.day = None
+        self.day_group_select.disabled = False
+        self.day_select.disabled = False
         await self._refresh_days()
         await interaction.response.edit_message(view=self)
 
@@ -424,7 +429,7 @@ class BirthdayDatePickerView(discord.ui.View):
         await interaction.response.edit_message(view=self)
 
     async def _refresh_days(self):
-        max_day = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][self.month - 1] if self.month else 31
+        max_day = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][self.month - 1] if self.month else 31
         if self.day and self.day > max_day:
             self.day = None
         end = min(self.day_group_start + (11 if self.day_group_start == 21 else 10), max_day + 1)
@@ -475,17 +480,18 @@ class BirthdayModal(discord.ui.Modal, title="Set Your Birthday"):
             if len(year_text) != 4 or not year_text.isdigit():
                 raise ValueError("year must have four digits")
             year = int(year_text)
-            datetime(year, self.month, self.day)  # Reject impossible dates, including Feb 29 in a non-leap year.
+            datetime(year, self.month, self.day)  # Reject impossible dates; the February picker stops at day 28.
         except (ValueError, TypeError):
             return await interaction.response.send_message("Enter a valid four-digit year for the selected birthday.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             await asyncio.to_thread(self.moderator.store.save_birthday, self.guild_id, interaction.user.id, str(interaction.user), self.day, self.month, year)
         except Exception as exc:
             self.moderator.log(f"Could not save birthday: {exc}")
-            return await interaction.response.send_message("Could not save your birthday. Please try again later.", ephemeral=True)
+            return await interaction.followup.send("Could not save your birthday. Please try again in a moment.", ephemeral=True)
         shown = format_birthday({"day": self.day, "month": self.month, "year": year})
         self.moderator.log(f"{interaction.user} set their birthday to {shown}.")
-        await interaction.response.send_message(f"\U0001f382 Your birthday has been set to **{shown}**. Only you can see this confirmation.", ephemeral=True)
+        await interaction.followup.send(f"\U0001f382 Your birthday has been set to **{shown}**. Only you can see this confirmation.", ephemeral=True)
 
 
 class TicketStaffActionView(discord.ui.View):
