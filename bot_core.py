@@ -385,26 +385,21 @@ class BirthdayDatePickerView(discord.ui.View):
         self.moderator, self.guild_id, self.user_id = moderator, guild_id, user_id
         self.month = None
         self.day = None
-        self.day_group_start = 1
+        self.day_page = 0
         self.month_select = discord.ui.Select(
-            placeholder="Choose a month",
+            placeholder="1. Choose your birth month",
             options=[discord.SelectOption(label=name, value=str(index)) for index, name in enumerate(self.MONTHS, 1)],
             row=0,
         )
         self.month_select.callback = self.choose_month
-        self.day_group_select = discord.ui.Select(
-            placeholder="Choose day range",
-            options=[discord.SelectOption(label=f"Days {start}-{min(start + (10 if start == 21 else 9), 31)}", value=str(start)) for start in (1, 11, 21)],
-            row=1,
-            disabled=True,
-        )
-        self.day_group_select.callback = self.choose_day_group
-        self.day_select = discord.ui.Select(placeholder="Choose a day", options=[discord.SelectOption(label=str(day), value=str(day)) for day in range(1, 11)], row=2, disabled=True)
+        self.day_select = discord.ui.Select(placeholder="2. Choose your birth day", options=[discord.SelectOption(label=str(day), value=str(day)) for day in range(1, 26)], row=1, disabled=True)
         self.day_select.callback = self.choose_day
+        self.more_days_button = discord.ui.Button(label="More days", style=discord.ButtonStyle.secondary, row=2, disabled=True)
+        self.more_days_button.callback = self.show_more_days
         self.add_item(self.month_select)
-        self.add_item(self.day_group_select)
         self.add_item(self.day_select)
-        button = discord.ui.Button(label="Continue", style=discord.ButtonStyle.primary, row=3)
+        self.add_item(self.more_days_button)
+        button = discord.ui.Button(label="Continue to year", style=discord.ButtonStyle.primary, row=3)
         button.callback = self.continue_to_year
         self.add_item(button)
 
@@ -417,31 +412,34 @@ class BirthdayDatePickerView(discord.ui.View):
     async def choose_month(self, interaction):
         self.month = int(self.month_select.values[0])
         self.day = None
-        self.day_group_select.disabled = False
+        self.day_page = 0
         self.day_select.disabled = False
         await self._refresh_days()
-        await interaction.response.edit_message(view=self)
-
-    async def choose_day_group(self, interaction):
-        self.day_group_start = int(self.day_group_select.values[0])
-        self.day = None
-        await self._refresh_days()
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(content=f"Month selected: **{self.MONTHS[self.month - 1]}**. Now choose your day.", view=self)
 
     async def _refresh_days(self):
         max_day = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][self.month - 1] if self.month else 31
         if self.day and self.day > max_day:
             self.day = None
-        end = min(self.day_group_start + (11 if self.day_group_start == 21 else 10), max_day + 1)
-        self.day_select.options = [discord.SelectOption(label=str(day), value=str(day)) for day in range(self.day_group_start, end)]
+        start = 1 if self.day_page == 0 else 26
+        end = min(start + 25, max_day + 1)
+        self.day_select.options = [discord.SelectOption(label=str(day), value=str(day)) for day in range(start, end)]
+        self.more_days_button.disabled = max_day <= 25 or self.day_page == 1
+
+    async def show_more_days(self, interaction):
+        self.day_page = 1
+        self.day = None
+        await self._refresh_days()
+        await interaction.response.edit_message(content="Choose a day from the remaining dates.", view=self)
 
     async def choose_day(self, interaction):
         self.day = int(self.day_select.values[0])
-        await interaction.response.edit_message(view=self)
+        month_name = self.MONTHS[self.month - 1]
+        await interaction.response.edit_message(content=f"Selected birthday: **{month_name} {self.day}**. Press **Continue to year** to enter your birth year.", view=self)
 
     async def continue_to_year(self, interaction):
         if not self.month or not self.day:
-            return await interaction.response.send_message("Choose both a month and a day first.", ephemeral=True)
+            return await interaction.response.send_message("Select a month and a day first. Then press **Continue to year**.", ephemeral=True)
         await interaction.response.send_modal(BirthdayModal(self.moderator, self.guild_id, self.day, self.month))
 
 
