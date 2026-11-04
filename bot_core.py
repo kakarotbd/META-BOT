@@ -357,90 +357,18 @@ class BirthdayDashboardView(discord.ui.View):
         configured_channel = self.moderator.settings.get("birthdays", {}).get(str(interaction.guild.id), {}).get("channel_id")
         if not configured_channel or str(interaction.channel_id) != str(configured_channel):
             return await interaction.response.send_message("Setting a birthday is not available in this channel anymore.", ephemeral=True)
-        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             existing = await asyncio.to_thread(self.moderator.store.get_birthday, interaction.guild.id, interaction.user.id)
         except Exception as exc:
             self.moderator.log(f"Could not check saved birthday for {interaction.user}: {exc}")
-            return await interaction.followup.send("Could not check your saved birthday. Please try again in a moment.", ephemeral=True)
+            return await interaction.response.send_message("Could not check your saved birthday. Please try again in a moment.", ephemeral=True)
         if existing:
-            return await interaction.followup.send(
+            return await interaction.response.send_message(
                 f"You already have a birthday saved: **{format_birthday(existing)}**. Do you want to change it?",
                 view=BirthdayChangeConfirmView(self.moderator, interaction.guild.id, interaction.user.id),
                 ephemeral=True,
             )
-        await interaction.followup.send(
-            "Select your birth month and day, then enter the year.",
-            view=BirthdayDatePickerView(self.moderator, interaction.guild.id, interaction.user.id),
-            ephemeral=True,
-        )
-
-
-class BirthdayDatePickerView(discord.ui.View):
-    """Private month/day selectors followed by a year-only modal."""
-    MONTHS = MONTH_NAMES
-
-    def __init__(self, moderator, guild_id, user_id):
-        super().__init__(timeout=180)
-        self.moderator, self.guild_id, self.user_id = moderator, guild_id, user_id
-        self.month = None
-        self.day = None
-        self.day_page = 0
-        self.month_select = discord.ui.Select(
-            placeholder="1. Choose your birth month",
-            options=[discord.SelectOption(label=name, value=str(index)) for index, name in enumerate(self.MONTHS, 1)],
-            row=0,
-        )
-        self.month_select.callback = self.choose_month
-        self.day_select = discord.ui.Select(placeholder="2. Choose your birth day", options=[discord.SelectOption(label=str(day), value=str(day)) for day in range(1, 26)], row=1, disabled=True)
-        self.day_select.callback = self.choose_day
-        self.more_days_button = discord.ui.Button(label="More days", style=discord.ButtonStyle.secondary, row=2, disabled=True)
-        self.more_days_button.callback = self.show_more_days
-        self.add_item(self.month_select)
-        self.add_item(self.day_select)
-        self.add_item(self.more_days_button)
-        button = discord.ui.Button(label="Continue to year", style=discord.ButtonStyle.primary, row=3)
-        button.callback = self.continue_to_year
-        self.add_item(button)
-
-    async def interaction_check(self, interaction):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("This birthday form belongs to another member.", ephemeral=True)
-            return False
-        return True
-
-    async def choose_month(self, interaction):
-        self.month = int(self.month_select.values[0])
-        self.day = None
-        self.day_page = 0
-        self.day_select.disabled = False
-        await self._refresh_days()
-        await interaction.response.edit_message(content=f"Month selected: **{self.MONTHS[self.month - 1]}**. Now choose your day.", view=self)
-
-    async def _refresh_days(self):
-        max_day = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][self.month - 1] if self.month else 31
-        if self.day and self.day > max_day:
-            self.day = None
-        start = 1 if self.day_page == 0 else 26
-        end = min(start + 25, max_day + 1)
-        self.day_select.options = [discord.SelectOption(label=str(day), value=str(day)) for day in range(start, end)]
-        self.more_days_button.disabled = max_day <= 25 or self.day_page == 1
-
-    async def show_more_days(self, interaction):
-        self.day_page = 1
-        self.day = None
-        await self._refresh_days()
-        await interaction.response.edit_message(content="Choose a day from the remaining dates.", view=self)
-
-    async def choose_day(self, interaction):
-        self.day = int(self.day_select.values[0])
-        month_name = self.MONTHS[self.month - 1]
-        await interaction.response.edit_message(content=f"Selected birthday: **{month_name} {self.day}**. Press **Continue to year** to enter your birth year.", view=self)
-
-    async def continue_to_year(self, interaction):
-        if not self.month or not self.day:
-            return await interaction.response.send_message("Select a month and a day first. Then press **Continue to year**.", ephemeral=True)
-        await interaction.response.send_modal(BirthdayModal(self.moderator, self.guild_id, self.day, self.month))
+        await interaction.response.send_modal(BirthdayModal(self.moderator, interaction.guild.id))
 
 
 class BirthdayChangeConfirmView(discord.ui.View):
@@ -454,10 +382,7 @@ class BirthdayChangeConfirmView(discord.ui.View):
     async def change_date(self, interaction):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("Only the member who opened this form can change this birthday.", ephemeral=True)
-        await interaction.response.edit_message(
-            content="Select your new birth month and day, then enter the year.",
-            view=BirthdayDatePickerView(self.moderator, self.guild_id, self.user_id),
-        )
+        await interaction.response.send_modal(BirthdayModal(self.moderator, self.guild_id))
 
     async def keep_date(self, interaction):
         if interaction.user.id != self.user_id:
@@ -466,28 +391,30 @@ class BirthdayChangeConfirmView(discord.ui.View):
 
 
 class BirthdayModal(discord.ui.Modal, title="Set Your Birthday"):
-    def __init__(self, moderator, guild_id, day, month):
+    def __init__(self, moderator, guild_id):
         super().__init__(); self.moderator, self.guild_id = moderator, guild_id
-        self.day, self.month = day, month
-        self.year = discord.ui.TextInput(label="Birth year", placeholder="e.g. 2000", max_length=4, min_length=4)
-        self.add_item(self.year)
+        self.day = discord.ui.TextInput(label="Day (1-31)", placeholder="e.g. 25", max_length=2)
+        self.month = discord.ui.TextInput(label="Month (1-12)", placeholder="e.g. 12", max_length=2)
+        self.year = discord.ui.TextInput(label="Year (optional)", placeholder="e.g. 2000", max_length=4, required=False)
+        self.add_item(self.day); self.add_item(self.month); self.add_item(self.year)
 
     async def on_submit(self, interaction):
         try:
+            day, month = int(self.day.value.strip()), int(self.month.value.strip())
             year_text = self.year.value.strip()
-            if len(year_text) != 4 or not year_text.isdigit():
-                raise ValueError("year must have four digits")
-            year = int(year_text)
-            datetime(year, self.month, self.day)  # Reject impossible dates; the February picker stops at day 28.
+            year = int(year_text) if year_text else None
+            if month == 2 and day > 28:
+                raise ValueError("February has at most 28 days")
+            datetime(year or 2000, month, day)
         except (ValueError, TypeError):
-            return await interaction.response.send_message("Enter a valid four-digit year for the selected birthday.", ephemeral=True)
+            return await interaction.response.send_message("Enter a valid day and month, and a valid year if provided.", ephemeral=True)
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            await asyncio.to_thread(self.moderator.store.save_birthday, self.guild_id, interaction.user.id, str(interaction.user), self.day, self.month, year)
+            await asyncio.to_thread(self.moderator.store.save_birthday, self.guild_id, interaction.user.id, str(interaction.user), day, month, year)
         except Exception as exc:
             self.moderator.log(f"Could not save birthday: {exc}")
             return await interaction.followup.send("Could not save your birthday. Please try again in a moment.", ephemeral=True)
-        shown = format_birthday({"day": self.day, "month": self.month, "year": year})
+        shown = format_birthday({"day": day, "month": month, "year": year})
         self.moderator.log(f"{interaction.user} set their birthday to {shown}.")
         await interaction.followup.send(f"\U0001f382 Your birthday has been set to **{shown}**. Only you can see this confirmation.", ephemeral=True)
 
@@ -957,7 +884,7 @@ HELP_PAGES = [
     ]),
     ("SUPPORT, BIRTHDAYS & COMMUNITY", "Use the persistent channel buttons and configured community channels.", [
         ("Support tickets", "Click **Create Ticket**, choose a category, describe the issue, and confirm. Your ticket is sent privately to the support team. Use the cancellation button in your confirmation if you no longer need help."),
-        ("Birthdays", "Click **Add Birthday**, select your birth month and day, then enter your four-digit birth year. The confirmation is private. If you already have a birthday saved, the bot asks before changing it. Birthday wishes are posted in the channel chosen by admins."),
+        ("Birthdays", "Click **Add Birthday**, type your day and month, and optionally enter your birth year. The confirmation is private. If you already have a birthday saved, the bot asks before changing it. Birthday wishes are posted in the channel chosen by admins."),
         ("Counting & greetings", "In the configured counting channel, post the next number in order. Welcome and goodbye messages are sent automatically when members join or leave."),
         ("Auto roles", "New members receive the roles selected by server admins automatically. Members do not need to run a command."),
     ]),

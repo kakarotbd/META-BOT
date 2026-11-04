@@ -1,6 +1,6 @@
 ﻿# Encrypted Discord Moderator: GUI + Railway
 
-`bot.py` is the desktop GUI controller and `railway_bot.py` is the 24/7 headless Railway worker. They both run the exact same moderation implementation in `bot_core.py` and use the same encrypted Cloudflare R2 control document.
+`bot.py` is the desktop GUI controller and `railway_bot.py` is the 24/7 headless Railway worker. They both run the exact same moderation implementation in `bot_core.py` and use the same encrypted Cloudflare D1 database for records and Cloudflare R2 for media. Keep `BOT_CONTROL_ID` and `BOT_ENCRYPTION_KEY` identical on the GUI computer and Railway. Settings saved by the GUI are read by Railway within about 10 seconds.
 
 No configuration, warnings, token, or logs are stored in project JSON files. Every application value written to Cloudflare R2 is Fernet encrypted before upload. Cloudflare R2 only sees ciphertext in `payload` fields.
 
@@ -12,7 +12,7 @@ Run only **one live Discord gateway connection for each Discord bot token**. If 
 
 1. Create a Cloudflare account, open R2 Object Storage, and create a private bucket.
 2. Create an R2 API token with Object Read & Write permission for the bucket. Keep the access key and secret private.
-3. Copy `.env.example` to `.env` and fill in the four `R2_*` variables, `ADMIN_USER_ID`, `ALLOWED_GUILD_ID`, and a new `BOT_ENCRYPTION_KEY`.
+3. Copy `.env.example` to `.env` and fill in the four `R2_*` variables, `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID`, `D1_API_TOKEN`, `ADMIN_USER_ID`, `ALLOWED_GUILD_ID`, and a new `BOT_ENCRYPTION_KEY`.
 4. Generate the encryption key once:
 
    ```powershell
@@ -55,18 +55,19 @@ Do not put a bot token, Cloudflare R2 credential, or encryption key in this text
 1. Create a new GitHub repository and push this project. Do not push `.env`, the Cloudflare R2 service-account file, or any token.
 2. In Railway: New Project → Deploy from GitHub Repo → select this repository.
 3. Railway detects the included `Dockerfile` and starts `python railway_bot.py` as a persistent worker. No web GUI/server is required. Do not add a custom start command unless it is exactly `python railway_bot.py`.
-4. In Railway Variables, add:
+4. In Railway Variables, add the same values used by the GUI:
 
    - `BOT_ENCRYPTION_KEY`: the same Fernet key from the GUI.
    - `BOT_CONTROL_ID`: `production` (or the same value used in the GUI).
+   - `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID`, `D1_API_TOKEN`: Cloudflare account ID, D1 database ID, and a D1 API token with permission to query that database. The GUI and Railway must point to the same database.
    - `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`: R2 S3-compatible credentials.
    - ADMIN_USER_ID: protected administrator Discord user ID; use the same value as local .env.
    - ALLOWED_GUILD_ID: 1517192928068636703 (MetaVerse Bangladesh); use the same value as local .env.
-   - 
+   `DISCORD_BOT_TOKEN` is optional: omit it to make Railway load the encrypted token from the shared D1 settings. If set, it is used only at startup.
 
-   `DISCORD_BOT_TOKEN` is optional: omit it to make Railway load the encrypted token from Cloudflare R2. If set, it is used only at startup.
+5. Set the same `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID`, `D1_API_TOKEN`, `BOT_CONTROL_ID`, `BOT_ENCRYPTION_KEY`, and R2 credentials in the GUI computer's `.env`. Railway refreshes settings every 10 seconds. Run only one live Discord connection for the token: leave the GUI disconnected after configuration so Railway remains the active bot.
 
-5. In Railway Service Settings, set **Restart Policy** to **Always** and use a paid Railway plan. Railway's free/trial plans do not support the Always policy, so they cannot promise 24-hour uptime. Deploy. The worker reconnects to Discord after errors and Railway restarts the container if it stops.
+6. In Railway Service Settings, set **Restart Policy** to **Always** and use a paid Railway plan. Railway's free/trial plans do not support the Always policy, so they cannot promise 24-hour uptime. Deploy. The worker reconnects to Discord after errors and Railway restarts the container if it stops.
 
 ## Text Send (`/chat`)
 
@@ -145,7 +146,7 @@ After creating a ticket, the user receives a **Cancel Ticket** button in the con
 
 ## Birthdays
 
-Use the GUI's **Birthdays** tab to choose a birthday entry channel and a separate birthday wish channel per server, and optionally upload a birthday image. The bot posts a persistent **🎂 Add Birthday** button in the entry channel. Clicking it opens a private form where members select their month, select a day (February offers days 1–28), then enter their four-digit birth year. Clicking **Add Birthday** again after a date is saved shows a private warning before changing it. Birthday records are stored in the shared Cloudflare D1 database; the GUI and Railway read and write the same records. Birthday wishes use shared fire-state records so a member is not celebrated twice for the same date. Keep only one live Discord gateway connection for a bot token, as described above. Older settings without a separate wish channel continue using the entry channel for wishes. Birthday images remain encrypted in R2.
+Use the GUI's **Birthdays** tab to choose a birthday entry channel and a separate birthday wish channel per server, and optionally upload a birthday image. The bot posts a persistent **🎂 Add Birthday** button in the entry channel. Clicking it opens a private form where members type their day and month, and may type their year. Clicking **Add Birthday** again after a date is saved shows a private warning before changing it. Birthday records are stored in the shared Cloudflare D1 database; the GUI and Railway read and write the same records. Birthday wishes use shared fire-state records so a member is not celebrated twice for the same date. Keep only one live Discord gateway connection for a bot token, as described above. Older settings without a separate wish channel continue using the entry channel for wishes. Birthday images remain encrypted in R2.
 
 ## What remains online on Railway
 
