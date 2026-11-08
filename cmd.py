@@ -14,7 +14,14 @@ from io import BytesIO
 
 import discord
 from discord import app_commands
-from discord.ext import voice_recv
+try:
+    from discord.ext import voice_recv
+    _VOICE_RECV_IMPORT_ERROR = None
+except ImportError as exc:
+    # Keep the desktop control panel usable when its local environment has not
+    # installed the optional voice-receive extension; Railway may still provide it.
+    voice_recv = None
+    _VOICE_RECV_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 from app_config import APP_CONFIG, PROJECT_ROOT
 
@@ -22,19 +29,42 @@ from app_config import APP_CONFIG, PROJECT_ROOT
 ACTIVE_CHAT_SESSIONS = {}
 IDLE_DISCONNECT_SECONDS = 300
 _WEB_QUERY = re.compile(r"\b(search|google|internet|web|latest|current|today|right now|news|weather|price|who won|look up|find online|this week|this year)\b", re.I)
+_API_KEY_SOURCE = "missing"
 
 
-def _api_key():
-    key = os.getenv("GEMINI_API_KEY", "").strip()
-    if key:
-        return key
+def _api_key(store=None):
+    global _API_KEY_SOURCE
+    key_names = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GEMINI_API_KEY", "GEMINI_KEY")
+    # GUI saves this value in Fernet-encrypted shared Cloudflare settings so the
+    # desktop bot and Railway worker can use the same key without a Railway copy.
+    if store is not None:
+        try:
+            shared_key = str(store.get_settings().get("vc_ai_api_key", "") or "").strip()
+            if shared_key:
+                _API_KEY_SOURCE = "encrypted Cloudflare settings"
+                return shared_key
+        except Exception as exc:
+            _voice_log(f"[voice-ai] shared API key lookup failed: {type(exc).__name__}: {str(exc)[:240]}")
+    for name in key_names:
+        key = os.getenv(name, "").strip()
+        if key:
+            _API_KEY_SOURCE = "Railway/process environment (" + name + ")"
+            return key
     try:
         from dotenv import dotenv_values
-        key = str(dotenv_values(PROJECT_ROOT / ".env").get("GEMINI_API_KEY", "") or "").strip()
+        file_values = dotenv_values(PROJECT_ROOT / ".env")
+        key = ""
+        for name in key_names:
+            key = str(file_values.get(name, "") or "").strip()
+            if key:
+                _API_KEY_SOURCE = "project .env (" + name + ")"
+                break
     except Exception:
         key = ""
     if key:
         os.environ["GEMINI_API_KEY"] = key
+    else:
+        _API_KEY_SOURCE = "missing"
     return key
 
 
@@ -43,10 +73,14 @@ def _voice_log(message):
     print(message, flush=True)
 
 
-class _SpeechSink(voice_recv.AudioSink):
+_AudioSinkBase = voice_recv.AudioSink if voice_recv is not None else object
+
+
+class _SpeechSink(_AudioSinkBase):
     """Buffer only the /call invoker's PCM speech and split after a pause."""
     def __init__(self, user_id):
-        super().__init__()
+        if voice_recv is not None:
+            super().__init__()
         self.user_id = int(user_id)
         self.lock = threading.Lock()
         self.buffer = bytearray()
@@ -93,7 +127,7 @@ class _SpeechSink(voice_recv.AudioSink):
             self.buffer.clear()
 
 
-def _gemini_audio_request(pcm, history, pending_action=None):
+def _gemini_audio_request(pcm, history, pending_action=None, store=None):
     wav_buffer = BytesIO()
     with wave.open(wav_buffer, "wb") as audio:
         audio.setnchannels(2)
@@ -141,7 +175,7 @@ def _gemini_audio_request(pcm, history, pending_action=None):
     model = os.getenv("VC_AI_MODEL", "gemini-3.8-flash").strip()
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     req = urllib.request.Request(endpoint, data=json.dumps(payload).encode(), headers={
-        "x-goog-api-key": _api_key(), "Content-Type": "application/json",
+        "x-goog-api-key": _api_key(store), "Content-Type": "application/json",
     }, method="POST")
     with urllib.request.urlopen(req, timeout=45) as response:
         body = json.loads(response.read().decode())
@@ -155,7 +189,7 @@ def _gemini_audio_request(pcm, history, pending_action=None):
     return result, sources
 
 
-def _gemini_web_answer(heard_text, history):
+def _gemini_web_answer(heard_text, history, store=None):
     model = os.getenv("VC_AI_MODEL", "gemini-3.8-flash").strip()
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload = {
@@ -165,7 +199,7 @@ def _gemini_web_answer(heard_text, history):
         "generationConfig": {"maxOutputTokens": 500},
     }
     request = urllib.request.Request(endpoint, data=json.dumps(payload).encode(), headers={
-        "x-goog-api-key": _api_key(), "Content-Type": "application/json",
+        "x-goog-api-key": _api_key(store), "Content-Type": "application/json",
     }, method="POST")
     with urllib.request.urlopen(request, timeout=45) as response:
         body = json.loads(response.read().decode())
@@ -389,7 +423,7 @@ async def _voice_chat_worker(moderator, guild, caller, vc, sink, session):
             duration = len(pcm) / (48000 * 2 * 2)
             _voice_log(f"[voice-ai] utterance buffered guild={guild.name!r} caller={caller.id} pcm_bytes={len(pcm)} approx_seconds={duration:.2f}; sending audio to Gemini model={os.getenv('VC_AI_MODEL', 'gemini-3.8-flash')}.")
             try:
-                result, _sources = await asyncio.to_thread(_gemini_audio_request, pcm, history, session.get("pending_action"))
+                result, _sources = await asyncio.to_thread(_gemini_audio_request, pcm, history, session.get("pending_action"), moderator.store)
                 heard = str(result.get("heard_text", "")).strip()[:500]
                 greeting_only = bool(re.fullmatch(r"[\W_]*(?:(?:hi|hello|hey|namaste|meta\s*bot|meta\s*ai|there)[\W_]*)+", heard, re.I))
                 if greeting_only and str(result.get("action", "answer")).lower() == "answer":
@@ -401,7 +435,7 @@ async def _voice_chat_worker(moderator, guild, caller, vc, sink, session):
                     reply = await _perform_action(guild, caller, result, session)
                     if str(result.get("action", "answer")).lower() == "answer" and heard and _WEB_QUERY.search(heard):
                         await _speak(vc, "Hold on, just a minute.")
-                        reply = await asyncio.to_thread(_gemini_web_answer, heard, history)
+                        reply = await asyncio.to_thread(_gemini_web_answer, heard, history, moderator.store)
                 if heard:
                     history.extend(["User: " + heard, "Assistant: " + reply[:500]])
                 _voice_log(f"[voice-ai] response prepared guild={guild.name!r} reply={reply[:180]!r}; starting TTS playback.")
@@ -423,10 +457,36 @@ async def _voice_chat_worker(moderator, guild, caller, vc, sink, session):
 
 def register(moderator, bot):
     """Register the single /call command; it toggles voice AI on/off."""
-    _voice_log(f"[voice-ai] startup config Gemini key={'present' if _api_key() else 'missing'} (value hidden), model={os.getenv('VC_AI_MODEL', 'gemini-3.8-flash')}, TTS voice={os.getenv('VC_AI_VOICE', 'en-US-AnaNeural')}, idle_disconnect_seconds={IDLE_DISCONNECT_SECONDS}.")
+    api_key = _api_key(moderator.store)
+    _voice_log(f"[voice-ai] startup config Gemini key={'present' if api_key else 'missing'} source={_API_KEY_SOURCE!r} (value hidden), model={os.getenv('VC_AI_MODEL', 'gemini-3.8-flash')}, TTS voice={os.getenv('VC_AI_VOICE', 'en-US-AnaNeural')}, idle_disconnect_seconds={IDLE_DISCONNECT_SECONDS}.")
+    if voice_recv is None:
+        _voice_log(f"[voice-ai] voice receive extension unavailable in {moderator.source} runtime: {_VOICE_RECV_IMPORT_ERROR}. Bot controls can still connect; /call is handled by a runtime with voice receive installed.")
     @bot.tree.command(name="call", description="Start or stop the voice AI chat in your current voice channel")
     @app_commands.guild_only()
     async def chat(interaction: discord.Interaction):
+        if voice_recv is None:
+            # If GUI and Railway both receive the same command, let the Railway
+            # process acknowledge it; this desktop environment lacks the sink.
+            if moderator.source == "gui":
+                return
+            return await interaction.response.send_message(
+                "Voice receive is not installed in this bot environment. Install the project requirements and restart the bot.",
+                ephemeral=True,
+            )
+        # GUI and Railway may both receive the same Gateway dispatch. A short
+        # shared claim ensures only one process starts/stops the voice session.
+        try:
+            claimed = await asyncio.to_thread(
+                moderator.store.claim_rate_limit,
+                "voice_ai_call_dispatch",
+                f"{interaction.guild_id}_{interaction.user.id}",
+                2,
+            )
+        except Exception as exc:
+            _voice_log(f"[voice-ai] shared /call dispatch claim failed: {type(exc).__name__}: {str(exc)[:200]}")
+            claimed = True
+        if not claimed:
+            return
         if not moderator.vc_ai_allowed(interaction.user):
             return await interaction.response.send_message("You do not have an allowed Voice AI role. GUI-te VC AI Permissions set korte hobe.", ephemeral=True)
         guild = interaction.guild
@@ -444,8 +504,8 @@ def register(moderator, bot):
         state = getattr(interaction.user, "voice", None)
         if not state or not state.channel:
             return await interaction.response.send_message("Age voice channel-e join koro, tarpor /call dao.", ephemeral=True)
-        if not _api_key():
-            return await interaction.response.send_message("Gemini key process-e load hoyni. Railway Variables-e exact GEMINI_API_KEY name diye set kore latest deployment redeploy koro; local-e AI tab theke .env-e save koro.", ephemeral=True)
+        if not _api_key(moderator.store):
+            return await interaction.response.send_message("Gemini API key shared Cloudflare settings, environment, ba local .env kono jaygay paoa jayni. GUI > VC AI Permissions-e key diye Save AI settings to encrypted Cloudflare koro. GUI ar Railway-te same BOT_CONTROL_ID, BOT_ENCRYPTION_KEY, D1/R2 config thakte hobe. Startup log-e key source dekho; secret value log hoy na.", ephemeral=True)
         me = guild.me
         permissions = state.channel.permissions_for(me) if me else None
         if not permissions or not permissions.connect or not permissions.speak:

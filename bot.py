@@ -146,7 +146,7 @@ class App:
         self.header_status.pack(side="right", padx=14, pady=11)
 
     def set_status(self, value):
-        online = str(value).lower() == "connected" or "connecting" in str(value).lower()
+        online = str(value).lower() == "connected" or "connecting" in str(value).lower() or "reconnecting" in str(value).lower()
         self.status.config(text=f"Status: {value}")
         self.header_status.config(text=f"?-? {str(value).upper()}", bg="#123b31" if online else "#2a1830", fg=self.SUCCESS if online else "#ff7b8a")
     def animate_status(self):
@@ -330,19 +330,20 @@ class App:
     def vc_ai_permissions_ui(self):
         f=self.vc_ai_permissions
         tk.Label(f,text="Gemini VC Assistant",font=("Segoe UI",15,"bold")).pack(pady=(22,6))
-        tk.Label(f,text="Configure Gemini locally, then choose which server roles may use /call below. The API key is saved only in this computer's .env file; add it separately to Railway Variables for the Railway worker.",wraplength=760,justify="center",fg=self.MUTED).pack(pady=(0,14))
+        tk.Label(f,text="Save the Gemini API key in encrypted shared Cloudflare settings. Both this GUI bot and the Railway worker read the same key automatically; it is not shown in logs.",wraplength=760,justify="center",fg=self.MUTED).pack(pady=(0,14))
         api_form=tk.Frame(f); api_form.pack(pady=4)
         tk.Label(api_form,text="Gemini API key:").grid(row=0,column=0,padx=6,pady=6,sticky="e")
         self.vc_ai_api_key=tk.Entry(api_form,width=56,show="*"); self.vc_ai_api_key.grid(row=0,column=1,padx=6,pady=6)
-        if os.getenv("GEMINI_API_KEY"):
-            self.vc_ai_api_key.insert(0,os.getenv("GEMINI_API_KEY"))
+        saved_ai_key=self.settings.get("vc_ai_api_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if saved_ai_key:
+            self.vc_ai_api_key.insert(0,saved_ai_key)
         tk.Label(api_form,text="Model:").grid(row=1,column=0,padx=6,pady=6,sticky="e")
         self.vc_ai_model=tk.Entry(api_form,width=56); self.vc_ai_model.grid(row=1,column=1,padx=6,pady=6)
         self.vc_ai_model.insert(0,os.getenv("VC_AI_MODEL","gemini-3.8-flash"))
         tk.Label(api_form,text="TTS voice:").grid(row=2,column=0,padx=6,pady=6,sticky="e")
         self.vc_ai_voice=tk.Entry(api_form,width=56); self.vc_ai_voice.grid(row=2,column=1,padx=6,pady=6)
         self.vc_ai_voice.insert(0,os.getenv("VC_AI_VOICE","en-US-AnaNeural"))
-        tk.Button(f,text="Save AI settings to local .env",command=self.save_vc_ai_config,width=34).pack(pady=(6,18))
+        tk.Button(f,text="Save AI settings to encrypted Cloudflare",command=self.save_vc_ai_config,width=38).pack(pady=(6,18))
         ttk.Separator(f,orient="horizontal").pack(fill="x",padx=42,pady=(0,12))
         tk.Label(f,text="Server").pack(pady=(18,3))
         self.vc_ai_server=ttk.Combobox(f,state="readonly",width=55); self.vc_ai_server.pack(); self.vc_ai_server.bind("<<ComboboxSelected>>",lambda e:self.show_vc_ai_roles())
@@ -352,10 +353,15 @@ class App:
         tk.Label(f,text="Only selected roles can start or stop /call. It joins your VC, listens to your speech, and answers automatically; bot needs Connect/Speak and action-specific permissions.",wraplength=720,justify="center",fg=self.MUTED).pack(pady=(12,2))
         tk.Button(f,text="Save VC AI permissions to Cloudflare",command=self.save_vc_ai_roles,width=34).pack(pady=15)
     def save_vc_ai_config(self):
-        key=self.vc_ai_api_key.get().strip()
+        key=self.vc_ai_api_key.get().strip() or str(self.settings.get("vc_ai_api_key", "")).strip()
         model=self.vc_ai_model.get().strip() or "gemini-3.8-flash"
         voice=self.vc_ai_voice.get().strip() or "en-US-AnaNeural"
         try:
+            if key:
+                self.settings["vc_ai_api_key"]=key
+            self.settings=self.store.save_settings(self.settings)
+            if self.runtime:
+                self.runtime.settings=self.settings
             if key:
                 set_key(str(PROJECT_ROOT / ".env"),"GEMINI_API_KEY",key)
                 os.environ["GEMINI_API_KEY"]=key
@@ -363,8 +369,8 @@ class App:
                 set_key(str(PROJECT_ROOT / ".env"),name,value)
                 os.environ[name]=value
         except Exception as exc:
-            return messagebox.showerror("Save failed",f"Could not write local .env: {exc}")
-        messagebox.showinfo("Saved","AI settings saved to this computer's .env. Railway uses its own Variables and must be configured separately.")
+            return messagebox.showerror("Save failed",f"Could not save encrypted shared AI settings: {exc}")
+        messagebox.showinfo("Saved","Gemini API key saved in encrypted Cloudflare settings. GUI and Railway will read the shared key automatically. Model and voice defaults are also saved to this computer's .env.")
     def show_vc_ai_roles(self):
         self.show_permission_roles(self.vc_ai_server,self.vc_ai_roles,"vc_ai_allowed_roles")
     def save_vc_ai_roles(self):
@@ -1126,11 +1132,31 @@ class App:
     def connect(self):
         if self.thread or not self.save_connection(): return
         def run():
-            try:
-                self.runtime=ModeratorBot(self.store,"gui",self.log,lambda kind,data:self.q.put((kind,data)))
-                asyncio.run(self.runtime.run(self.settings["token"]))
-            except Exception as exc: self.q.put(("log",f"Connection error: {exc}"))
-            finally: self.thread=None; self.runtime=None; self.q.put(("status","Disconnected"))
+            delay=5
+            final_status="Disconnected"
+            while True:
+                try:
+                    fresh_settings=self.store.get_settings()
+                    self.settings=fresh_settings
+                    token=str(fresh_settings.get("token", "")).strip()
+                    if not token:
+                        raise RuntimeError("No Discord token is saved in shared Cloudflare settings.")
+                    self.runtime=ModeratorBot(self.store,"gui",self.log,lambda kind,data:self.q.put((kind,data)))
+                    asyncio.run(self.runtime.run(token))
+                    self.q.put(("log","GUI Discord gateway ended; reconnecting."))
+                except Exception as exc:
+                    self.q.put(("log",f"GUI connection error ({type(exc).__name__}): {exc}"))
+                    if type(exc).__name__ in {"LoginFailure", "PrivilegedIntentsRequired"}:
+                        final_status=f"Disconnected ({type(exc).__name__})"
+                        break
+                finally:
+                    self.runtime=None
+                self.q.put(("status",f"Reconnecting in {delay}s"))
+                if self.thread is None: break
+                threading.Event().wait(delay)
+                delay=min(delay*2,180)
+            self.thread=None
+            self.q.put(("status",final_status))
         self.thread=threading.Thread(target=run,daemon=True); self.thread.start(); self.set_status("Connecting")
 
     def show_permission_roles(self, server, role_list, setting_name):
