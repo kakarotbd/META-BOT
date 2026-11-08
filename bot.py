@@ -5,10 +5,10 @@ from tzlocal import get_localzone_name
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from PIL import Image, ImageSequence, ImageTk
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key
 from bot_core import ModeratorBot, DEFAULT_TICKET_CLOSE_NOTE
 from d1_store import CloudflareD1Store
-from app_config import APP_CONFIG
+from app_config import APP_CONFIG, PROJECT_ROOT
 load_dotenv()
 
 MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024  # Non-GIF limit only; original GIFs are stored in R2.
@@ -305,11 +305,11 @@ class App:
     def chat_permissions_ui(self):
         f=self.chat_permissions; tk.Label(f,text="Server").pack(pady=(18,3))
         self.chat_server=ttk.Combobox(f,state="readonly",width=55); self.chat_server.pack(); self.chat_server.bind("<<ComboboxSelected>>",lambda e:self.show_chat_roles())
-        tk.Label(f,text="Roles allowed to use the /chat message feature",font=("Segoe UI", 12, "bold")).pack(pady=(18,3))
+        tk.Label(f,text="Roles allowed to use /chat voice AI (existing Chat permission list)",font=("Segoe UI", 12, "bold")).pack(pady=(18,3))
         self.chat_roles=tk.Listbox(f,selectmode="multiple",width=65,height=16,exportselection=False); self.chat_roles.pack(); self.chat_roles.bind("<<ListboxSelect>>", lambda event: self.update_role_summary(self.chat_roles, self.chat_role_summary))
         self.chat_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.chat_role_summary.pack(pady=(6,0))
-        tk.Label(f,text="This permission controls /chat only; it never filters or deletes normal messages.",fg=self.MUTED).pack(pady=(12,2))
-        tk.Button(f,text="Save chat permissions to Cloudflare R2",command=self.save_chat_roles,width=34).pack(pady=15)
+        tk.Label(f,text="Selected roles here or in VC AI Permissions can use /chat. Normal messages are unaffected.",fg=self.MUTED).pack(pady=(12,2))
+        tk.Button(f,text="Save /chat role permissions to Cloudflare R2",command=self.save_chat_roles,width=34).pack(pady=15)
 
     def link_permissions_ui(self):
         f=self.link_permissions; tk.Label(f,text="Server").pack(pady=(18,3))
@@ -329,13 +329,42 @@ class App:
         tk.Button(f,text="Save drag permissions to Cloudflare R2",command=self.save_drag_roles,width=34).pack(pady=15)
     def vc_ai_permissions_ui(self):
         f=self.vc_ai_permissions
+        tk.Label(f,text="Gemini VC Assistant",font=("Segoe UI",15,"bold")).pack(pady=(22,6))
+        tk.Label(f,text="Configure Gemini locally, then choose which server roles may use /call below. The API key is saved only in this computer's .env file; add it separately to Railway Variables for the Railway worker.",wraplength=760,justify="center",fg=self.MUTED).pack(pady=(0,14))
+        api_form=tk.Frame(f); api_form.pack(pady=4)
+        tk.Label(api_form,text="Gemini API key:").grid(row=0,column=0,padx=6,pady=6,sticky="e")
+        self.vc_ai_api_key=tk.Entry(api_form,width=56,show="*"); self.vc_ai_api_key.grid(row=0,column=1,padx=6,pady=6)
+        if os.getenv("GEMINI_API_KEY"):
+            self.vc_ai_api_key.insert(0,os.getenv("GEMINI_API_KEY"))
+        tk.Label(api_form,text="Model:").grid(row=1,column=0,padx=6,pady=6,sticky="e")
+        self.vc_ai_model=tk.Entry(api_form,width=56); self.vc_ai_model.grid(row=1,column=1,padx=6,pady=6)
+        self.vc_ai_model.insert(0,os.getenv("VC_AI_MODEL","gemini-3.8-flash"))
+        tk.Label(api_form,text="TTS voice:").grid(row=2,column=0,padx=6,pady=6,sticky="e")
+        self.vc_ai_voice=tk.Entry(api_form,width=56); self.vc_ai_voice.grid(row=2,column=1,padx=6,pady=6)
+        self.vc_ai_voice.insert(0,os.getenv("VC_AI_VOICE","en-US-AnaNeural"))
+        tk.Button(f,text="Save AI settings to local .env",command=self.save_vc_ai_config,width=34).pack(pady=(6,18))
+        ttk.Separator(f,orient="horizontal").pack(fill="x",padx=42,pady=(0,12))
         tk.Label(f,text="Server").pack(pady=(18,3))
         self.vc_ai_server=ttk.Combobox(f,state="readonly",width=55); self.vc_ai_server.pack(); self.vc_ai_server.bind("<<ComboboxSelected>>",lambda e:self.show_vc_ai_roles())
-        tk.Label(f,text="Roles allowed to use /call (AI voice and actions)",font=("Segoe UI",12,"bold")).pack(pady=(18,3))
+        tk.Label(f,text="Roles allowed to start /chat voice AI",font=("Segoe UI",12,"bold")).pack(pady=(18,3))
         self.vc_ai_roles=tk.Listbox(f,selectmode="multiple",width=65,height=16,exportselection=False); self.vc_ai_roles.pack(); self.vc_ai_roles.bind("<<ListboxSelect>>",lambda e:self.update_role_summary(self.vc_ai_roles,self.vc_ai_role_summary))
         self.vc_ai_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.vc_ai_role_summary.pack(pady=(6,0))
-        tk.Label(f,text="Only selected roles can use /call. It joins and stays in the caller's current VC; bot needs Connect/Speak and action-specific permissions.",wraplength=720,justify="center",fg=self.MUTED).pack(pady=(12,2))
+        tk.Label(f,text="Only selected roles can start or stop /chat. It joins your VC, listens to your speech, and answers automatically; bot needs Connect/Speak and action-specific permissions.",wraplength=720,justify="center",fg=self.MUTED).pack(pady=(12,2))
         tk.Button(f,text="Save VC AI permissions to Cloudflare",command=self.save_vc_ai_roles,width=34).pack(pady=15)
+    def save_vc_ai_config(self):
+        key=self.vc_ai_api_key.get().strip()
+        model=self.vc_ai_model.get().strip() or "gemini-3.8-flash"
+        voice=self.vc_ai_voice.get().strip() or "en-US-AnaNeural"
+        try:
+            if key:
+                set_key(str(PROJECT_ROOT / ".env"),"GEMINI_API_KEY",key)
+                os.environ["GEMINI_API_KEY"]=key
+            for name,value in (("VC_AI_MODEL",model),("VC_AI_VOICE",voice)):
+                set_key(str(PROJECT_ROOT / ".env"),name,value)
+                os.environ[name]=value
+        except Exception as exc:
+            return messagebox.showerror("Save failed",f"Could not write local .env: {exc}")
+        messagebox.showinfo("Saved","AI settings saved to this computer's .env. Railway uses its own Variables and must be configured separately.")
     def show_vc_ai_roles(self):
         self.show_permission_roles(self.vc_ai_server,self.vc_ai_roles,"vc_ai_allowed_roles")
     def save_vc_ai_roles(self):
