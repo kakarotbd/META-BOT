@@ -564,6 +564,11 @@ def register(moderator, bot):
     except Exception as exc:
         dave_status = f"missing ({type(exc).__name__}: {exc})"
     _voice_log(f"[voice-ai] startup config Gemini key={'present' if api_key else 'missing'} source={_API_KEY_SOURCE!r} (value hidden), model={os.getenv('VC_AI_MODEL', 'gemini-3.8-flash')}, TTS voice={os.getenv('VC_AI_VOICE', 'en-US-AnaNeural')}, davey={dave_status}, idle_disconnect_seconds={IDLE_DISCONNECT_SECONDS}.")
+    async def _log_dave_json_opcode(op, data):
+        labels = {21: "PREPARE_TRANSITION", 22: "EXECUTE_TRANSITION", 23: "TRANSITION_READY", 24: "PREPARE_EPOCH"}
+        fields = {key: data.get(key) for key in ("transition_id", "protocol_version", "epoch") if isinstance(data, dict) and key in data}
+        _voice_log(f"[voice-ai] DAVE gateway event opcode={op} name={labels.get(op, 'UNKNOWN')} fields={fields}.")
+    bot.add_listener(_log_dave_json_opcode, "on_voice_dave_opcode")
     if voice_recv is None:
         _voice_log(f"[voice-ai] voice receive extension unavailable in {moderator.source} runtime: {_VOICE_RECV_IMPORT_ERROR}. Bot controls can still connect; /call is handled by a runtime with voice receive installed.")
     @bot.tree.command(name="call", description="Start or stop the voice AI chat in your current voice channel")
@@ -621,6 +626,14 @@ def register(moderator, bot):
             if current and current.is_connected():
                 await current.disconnect(force=True)
             vc = await state.channel.connect(cls=voice_recv.VoiceRecvClient)
+            previous_binary_hook = getattr(vc, "_update_voice_ws_binary_state", None)
+            binary_names = {25: "MLS_EXTERNAL_SENDER", 27: "MLS_PROPOSALS", 28: "MLS_COMMIT_WELCOME", 29: "MLS_ANNOUNCE_COMMIT_TRANSITION", 30: "MLS_WELCOME"}
+            def _log_dave_binary_opcode(op, body, *, seq=None, raw_len=None):
+                if callable(previous_binary_hook):
+                    previous_binary_hook(op, body, seq=seq, raw_len=raw_len)
+                if op in binary_names:
+                    _voice_log(f"[voice-ai] DAVE binary event opcode={op} name={binary_names[op]} seq={seq} bytes={len(body)} raw_bytes={raw_len}.")
+            vc._update_voice_ws_binary_state = _log_dave_binary_opcode
             connection = getattr(vc, "_connection", None)
             dave_protocol = getattr(connection, "dave_protocol_version", 0) if connection else 0
             dave_session = getattr(connection, "dave_session", None) if connection else None
