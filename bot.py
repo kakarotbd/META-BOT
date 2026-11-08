@@ -305,11 +305,11 @@ class App:
     def chat_permissions_ui(self):
         f=self.chat_permissions; tk.Label(f,text="Server").pack(pady=(18,3))
         self.chat_server=ttk.Combobox(f,state="readonly",width=55); self.chat_server.pack(); self.chat_server.bind("<<ComboboxSelected>>",lambda e:self.show_chat_roles())
-        tk.Label(f,text="Roles allowed to use /chat voice AI (existing Chat permission list)",font=("Segoe UI", 12, "bold")).pack(pady=(18,3))
+        tk.Label(f,text="Roles allowed to use the /chat text-message feature",font=("Segoe UI", 12, "bold")).pack(pady=(18,3))
         self.chat_roles=tk.Listbox(f,selectmode="multiple",width=65,height=16,exportselection=False); self.chat_roles.pack(); self.chat_roles.bind("<<ListboxSelect>>", lambda event: self.update_role_summary(self.chat_roles, self.chat_role_summary))
         self.chat_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.chat_role_summary.pack(pady=(6,0))
-        tk.Label(f,text="Selected roles here or in VC AI Permissions can use /chat. Normal messages are unaffected.",fg=self.MUTED).pack(pady=(12,2))
-        tk.Button(f,text="Save /chat role permissions to Cloudflare R2",command=self.save_chat_roles,width=34).pack(pady=15)
+        tk.Label(f,text="This permission controls /chat only; it never filters or deletes normal messages.",fg=self.MUTED).pack(pady=(12,2))
+        tk.Button(f,text="Save chat permissions to Cloudflare R2",command=self.save_chat_roles,width=34).pack(pady=15)
 
     def link_permissions_ui(self):
         f=self.link_permissions; tk.Label(f,text="Server").pack(pady=(18,3))
@@ -346,10 +346,10 @@ class App:
         ttk.Separator(f,orient="horizontal").pack(fill="x",padx=42,pady=(0,12))
         tk.Label(f,text="Server").pack(pady=(18,3))
         self.vc_ai_server=ttk.Combobox(f,state="readonly",width=55); self.vc_ai_server.pack(); self.vc_ai_server.bind("<<ComboboxSelected>>",lambda e:self.show_vc_ai_roles())
-        tk.Label(f,text="Roles allowed to start /chat voice AI",font=("Segoe UI",12,"bold")).pack(pady=(18,3))
+        tk.Label(f,text="Roles allowed to start /call voice AI",font=("Segoe UI",12,"bold")).pack(pady=(18,3))
         self.vc_ai_roles=tk.Listbox(f,selectmode="multiple",width=65,height=16,exportselection=False); self.vc_ai_roles.pack(); self.vc_ai_roles.bind("<<ListboxSelect>>",lambda e:self.update_role_summary(self.vc_ai_roles,self.vc_ai_role_summary))
         self.vc_ai_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.vc_ai_role_summary.pack(pady=(6,0))
-        tk.Label(f,text="Only selected roles can start or stop /chat. It joins your VC, listens to your speech, and answers automatically; bot needs Connect/Speak and action-specific permissions.",wraplength=720,justify="center",fg=self.MUTED).pack(pady=(12,2))
+        tk.Label(f,text="Only selected roles can start or stop /call. It joins your VC, listens to your speech, and answers automatically; bot needs Connect/Speak and action-specific permissions.",wraplength=720,justify="center",fg=self.MUTED).pack(pady=(12,2))
         tk.Button(f,text="Save VC AI permissions to Cloudflare",command=self.save_vc_ai_roles,width=34).pack(pady=15)
     def save_vc_ai_config(self):
         key=self.vc_ai_api_key.get().strip()

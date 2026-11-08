@@ -20,6 +20,8 @@ from app_config import APP_CONFIG, PROJECT_ROOT
 
 
 ACTIVE_CHAT_SESSIONS = {}
+IDLE_DISCONNECT_SECONDS = 300
+_WEB_QUERY = re.compile(r"\b(search|google|internet|web|latest|current|today|right now|news|weather|price|who won|look up|find online|this week|this year)\b", re.I)
 
 
 def _api_key():
@@ -37,13 +39,15 @@ def _api_key():
 
 
 class _SpeechSink(voice_recv.AudioSink):
-    """Buffer only the /chat invoker's PCM speech and split after a pause."""
+    """Buffer only the /call invoker's PCM speech and split after a pause."""
     def __init__(self, user_id):
         super().__init__()
         self.user_id = int(user_id)
         self.lock = threading.Lock()
         self.buffer = bytearray()
         self.last_speech_at = 0.0
+        self.last_activity_at = time.monotonic()
+        self.packet_count = 0
 
     def wants_opus(self):
         return False
@@ -59,11 +63,13 @@ class _SpeechSink(voice_recv.AudioSink):
                 return
             # Ignore decoded silence and room noise; audio is retained only for the authorized caller.
             level = sum(abs(value) for value in samples) / len(samples)
-            if level < 220:
+            if level < 100:
                 return
         except (ValueError, OverflowError):
             return
         with self.lock:
+            self.packet_count += 1
+            self.last_activity_at = time.monotonic()
             if len(self.buffer) < 8_000_000:
                 self.buffer.extend(pcm)
                 self.last_speech_at = time.monotonic()
@@ -91,7 +97,11 @@ def _gemini_audio_request(pcm, history, pending_action=None):
         audio.writeframes(pcm)
     system = (
         "You are a helpful Discord voice assistant. Understand the caller's spoken English, Bangla, or Banglish, "
-        "and answer in clear natural English. The caller is speaking live in a voice channel. Use action=answer for "
+        "and answer in clear natural English. Your owner is Rafin; use a friendly, playful, confident conversational style inspired by Rafin, but never claim to be Rafin or impersonate him. "
+        "If a question is genuinely funny, react briefly and naturally with 'Haha!' before answering; do not force laughter. "
+        "If asked who you are, say you are Meta AI, an AI assistant made of code with no physical body, then explain warmly that you can chat and help. "
+        "If the caller greets you, greet them warmly and ask how you can help. "
+        "The caller is speaking live in a voice channel. Use action=answer for "
         "ordinary questions, action=kick or action=ban only for an explicit kick/ban request, action=move only for an explicit voice "
         "move request, and action=send_message only for an explicit request to post text in a server text channel. "
         "For Discord actions, extract the exact target member name, destination voice-channel name, text-channel name, "
@@ -122,8 +132,6 @@ def _gemini_audio_request(pcm, history, pending_action=None):
             "maxOutputTokens": 500,
         },
     }
-    # Make web grounding available every turn; Gemini decides when a search is useful.
-    payload["tools"] = [{"google_search": {}}]
     model = os.getenv("VC_AI_MODEL", "gemini-3.8-flash").strip()
     endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     req = urllib.request.Request(endpoint, data=json.dumps(payload).encode(), headers={
@@ -139,6 +147,32 @@ def _gemini_audio_request(pcm, history, pending_action=None):
         if web.get("uri"):
             sources.append({"title": web.get("title") or web["uri"], "url": web["uri"]})
     return result, sources
+
+
+def _gemini_web_answer(heard_text, history):
+    model = os.getenv("VC_AI_MODEL", "gemini-3.8-flash").strip()
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    payload = {
+        "systemInstruction": {"parts": [{"text": "Answer in clear, concise, natural English using current web information, and cite the most useful source names. Your owner is Rafin; use a friendly, playful, confident style inspired by Rafin without pretending to be him. If the question is genuinely funny, react briefly with 'Haha!' and then answer. If asked who you are, say you are Meta AI, an AI assistant made of code with no physical body."}]},
+        "contents": [{"role": "user", "parts": [{"text": f"Context: {json.dumps(history[-6:], ensure_ascii=False)}\nQuestion: {heard_text}"}]}],
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"maxOutputTokens": 500},
+    }
+    request = urllib.request.Request(endpoint, data=json.dumps(payload).encode(), headers={
+        "x-goog-api-key": _api_key(), "Content-Type": "application/json",
+    }, method="POST")
+    with urllib.request.urlopen(request, timeout=45) as response:
+        body = json.loads(response.read().decode())
+    candidate = body["candidates"][0]
+    answer = " ".join(part.get("text", "") for part in candidate["content"].get("parts", []) if part.get("text")).strip()
+    sources = []
+    for chunk in candidate.get("groundingMetadata", {}).get("groundingChunks", []):
+        web = chunk.get("web") or {}
+        if web.get("title"):
+            sources.append(web["title"])
+    if sources:
+        answer += " Sources: " + "; ".join(dict.fromkeys(sources[:3]))
+    return answer
 
 
 def _normalize(value):
@@ -184,13 +218,16 @@ async def _speak(vc, text):
     path = temp.name
     temp.close()
     try:
+        print(f"[voice-ai] TTS start chars={len(text)} voice={os.getenv('VC_AI_VOICE', 'en-US-AnaNeural')}", flush=True)
         await edge_tts.Communicate(text[:500], os.getenv("VC_AI_VOICE", "en-US-AnaNeural"), rate="+5%", pitch="+8Hz").save(path)
+        print(f"[voice-ai] TTS audio ready bytes={os.path.getsize(path)}; sending to Discord", flush=True)
         done = asyncio.Event()
         loop = asyncio.get_running_loop()
         if vc.is_playing():
             vc.stop()
         vc.play(discord.FFmpegPCMAudio(path), after=lambda _error: loop.call_soon_threadsafe(done.set))
         await asyncio.wait_for(done.wait(), timeout=60)
+        print("[voice-ai] TTS playback finished", flush=True)
     finally:
         try:
             os.unlink(path)
@@ -198,7 +235,7 @@ async def _speak(vc, text):
             pass
 
 
-async def _confirmable_action(guild, result, session):
+async def _confirmable_action(guild, caller, result, session):
     action = str(result.get("action", "answer")).lower()
     if action not in {"kick", "ban", "move"}:
         return str(result.get("reply", "Sorry, I didn't understand that. Please say it again."))[:500]
@@ -207,7 +244,7 @@ async def _confirmable_action(guild, result, session):
         session["pending_action"] = {"action": action, "phase": "target"}
         return "Sir, tell me the username you want me to " + ("move." if action == "move" else action + ".")
     target = await _find_member(guild, target_name)
-    if not target or target.id == APP_CONFIG.admin_user_id or target == guild.owner or target.bot:
+    if not target or target.id in {caller.id, APP_CONFIG.admin_user_id} or target == guild.owner or target.bot:
         return f"I couldn't find one eligible server member named {target_name}. Please say the exact username again."
     pending = {"action": action, "phase": "confirm", "target_id": target.id}
     if action == "move":
@@ -234,7 +271,7 @@ async def _advance_pending_action(guild, caller, session, heard_text):
         return "Sorry, I didn't catch that. Please say it again."
     if pending["phase"] == "target":
         target = await _find_member(guild, heard)
-        if not target or target.id == APP_CONFIG.admin_user_id or target == guild.owner or target.bot:
+        if not target or target.id in {caller.id, APP_CONFIG.admin_user_id} or target == guild.owner or target.bot:
             session["pending_action"] = None
             return f"I couldn't find one eligible server member named {heard}. Please start again and say the exact username."
         pending["target_id"] = target.id
@@ -270,19 +307,19 @@ async def _advance_pending_action(guild, caller, session, heard_text):
     if action == "kick":
         if not me.guild_permissions.kick_members:
             return "I don't have the Kick Members permission."
-        await target.kick(reason=f"Confirmed by voice /chat user {caller} ({caller.id})")
+        await target.kick(reason=f"Confirmed by voice /call user {caller} ({caller.id})")
         return f"{target.display_name} has been kicked from the server."
     if action == "ban":
         if not me.guild_permissions.ban_members:
             return "I don't have the Ban Members permission."
-        await target.ban(reason=f"Confirmed by voice /chat user {caller} ({caller.id})", delete_message_seconds=0)
+        await target.ban(reason=f"Confirmed by voice /call user {caller} ({caller.id})", delete_message_seconds=0)
         return f"{target.display_name} has been banned from the server."
     destination = guild.get_channel(pending.get("destination_id"))
     if not destination or not target.voice or not target.voice.channel:
         return "That member is no longer in a voice channel, so I couldn't move them."
     if not me.guild_permissions.move_members:
         return "I don't have the Move Members permission."
-    await target.move_to(destination, reason=f"Confirmed by voice /chat user {caller} ({caller.id})")
+    await target.move_to(destination, reason=f"Confirmed by voice /call user {caller} ({caller.id})")
     return f"{target.display_name} has been moved to {destination.name}."
 
 
@@ -291,7 +328,7 @@ async def _perform_action(guild, caller, result, session):
     me = guild.me
     reply = str(result.get("reply", "Sorry, I didn't understand that. Please say it again."))[:500]
     if action in {"kick", "ban", "move"}:
-        return await _confirmable_action(guild, result, session)
+        return await _confirmable_action(guild, caller, result, session)
     if action == "send_message":
         channel = _find_channel(guild.text_channels, result.get("channel_name"))
         content = str(result.get("message_text", "")).strip()
@@ -308,26 +345,62 @@ async def _perform_action(guild, caller, result, session):
 
 async def _voice_chat_worker(moderator, guild, caller, vc, sink, session):
     history = []
+    last_packet_log = 0.0
+    last_packet_count = 0
     try:
         while session["active"] and vc.is_connected():
             await asyncio.sleep(0.2)
+            now = time.monotonic()
+            with sink.lock:
+                packet_count = sink.packet_count
+                last_activity = sink.last_activity_at
+            if now - last_packet_log >= 30:
+                moderator.log(f"[voice-ai] receive health guild={guild.name!r} caller={caller.id} speech_packets_total={packet_count} speech_packets_30s={packet_count-last_packet_count} silence_seconds={int(now-last_activity)} connected={vc.is_connected()}.")
+                last_packet_count = packet_count
+                last_packet_log = now
+            if now - last_activity >= IDLE_DISCONNECT_SECONDS:
+                session["active"] = False
+                moderator.log(f"Voice AI disconnected from {guild.name} after five minutes without caller speech.")
+                try:
+                    vc.stop_listening()
+                    await vc.disconnect(force=True)
+                except (discord.ClientException, discord.HTTPException):
+                    pass
+                channel = session.get("text_channel")
+                if channel:
+                    try:
+                        await channel.send("Voice AI stopped after 5 minutes without speech.")
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
+                break
             pcm = sink.take_after_pause()
             if not pcm:
                 continue
+            duration = len(pcm) / (48000 * 2 * 2)
+            moderator.log(f"[voice-ai] utterance buffered guild={guild.name!r} caller={caller.id} pcm_bytes={len(pcm)} approx_seconds={duration:.2f}; sending audio to Gemini model={os.getenv('VC_AI_MODEL', 'gemini-3.8-flash')}.")
             try:
-                result, sources = await asyncio.to_thread(_gemini_audio_request, pcm, history, session.get("pending_action"))
+                result, _sources = await asyncio.to_thread(_gemini_audio_request, pcm, history, session.get("pending_action"))
                 heard = str(result.get("heard_text", "")).strip()[:500]
+                moderator.log(f"[voice-ai] Gemini audio success guild={guild.name!r} heard={heard[:180]!r} action={result.get('action', 'answer')} reply_chars={len(str(result.get('reply', '')))}.")
                 if session.get("pending_action"):
                     reply = await _advance_pending_action(guild, caller, session, heard)
                 else:
                     reply = await _perform_action(guild, caller, result, session)
+                    if str(result.get("action", "answer")).lower() == "answer" and heard and _WEB_QUERY.search(heard):
+                        await _speak(vc, "Hold on, just a minute.")
+                        reply = await asyncio.to_thread(_gemini_web_answer, heard, history)
                 if heard:
                     history.extend(["User: " + heard, "Assistant: " + reply[:500]])
-                if sources:
-                    reply += " Sources: " + "; ".join(source["title"] for source in sources[:3])
+                moderator.log(f"[voice-ai] response prepared guild={guild.name!r} reply={reply[:180]!r}; starting TTS playback.")
                 await _speak(vc, reply)
             except Exception as exc:
-                moderator.log(f"Voice /chat turn failed in {guild.name}: {exc}")
+                moderator.log(f"[voice-ai] turn failed guild={guild.name!r} error_type={type(exc).__name__} http_status={getattr(exc, 'code', None)} reason={getattr(exc, 'reason', None)!r} detail={str(exc)[:500]!r}")
+                channel = session.get("text_channel")
+                if channel:
+                    try:
+                        await channel.send("I received voice input but couldn't produce an answer. Check Gemini quota/key and TTS/FFmpeg logs.")
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
                 if vc.is_connected():
                     try:
                         await _speak(vc, "I had trouble processing that. Please say it again in a moment.")
@@ -342,9 +415,9 @@ async def _voice_chat_worker(moderator, guild, caller, vc, sink, session):
 
 
 def register(moderator, bot):
-    """Register the single /chat command; it toggles voice AI on/off."""
-    moderator.log(f"Voice AI config loaded: Gemini key={'present' if _api_key() else 'missing'}, model={os.getenv('VC_AI_MODEL', 'gemini-3.8-flash')}.")
-    @bot.tree.command(name="chat", description="Start or stop the voice AI chat in your current voice channel")
+    """Register the single /call command; it toggles voice AI on/off."""
+    moderator.log(f"[voice-ai] startup config Gemini key={'present' if _api_key() else 'missing'} (value hidden), model={os.getenv('VC_AI_MODEL', 'gemini-3.8-flash')}, TTS voice={os.getenv('VC_AI_VOICE', 'en-US-AnaNeural')}, idle_disconnect_seconds={IDLE_DISCONNECT_SECONDS}.")
+    @bot.tree.command(name="call", description="Start or stop the voice AI chat in your current voice channel")
     @app_commands.guild_only()
     async def chat(interaction: discord.Interaction):
         if not moderator.vc_ai_allowed(interaction.user):
@@ -353,7 +426,7 @@ def register(moderator, bot):
         active = ACTIVE_CHAT_SESSIONS.get(guild.id)
         if active:
             if active["owner_id"] != interaction.user.id:
-                return await interaction.response.send_message("Voice AI is already active in this server; only the member who started it can stop it with /chat.", ephemeral=True)
+                return await interaction.response.send_message("Voice AI is already active in this server; only the member who started it can stop it with /call.", ephemeral=True)
             active["active"] = False
             active["vc"].stop_listening()
             active["task"].cancel()
@@ -363,7 +436,7 @@ def register(moderator, bot):
 
         state = getattr(interaction.user, "voice", None)
         if not state or not state.channel:
-            return await interaction.response.send_message("Age voice channel-e join koro, tarpor /chat dao.", ephemeral=True)
+            return await interaction.response.send_message("Age voice channel-e join koro, tarpor /call dao.", ephemeral=True)
         if not _api_key():
             return await interaction.response.send_message("Gemini key process-e load hoyni. Railway Variables-e exact GEMINI_API_KEY name diye set kore latest deployment redeploy koro; local-e AI tab theke .env-e save koro.", ephemeral=True)
         me = guild.me
@@ -376,17 +449,25 @@ def register(moderator, bot):
             if current and current.is_connected():
                 await current.disconnect(force=True)
             vc = await state.channel.connect(cls=voice_recv.VoiceRecvClient)
+            dave_check = getattr(vc, "is_dave_connection", None)
+            dave_active = dave_check() if callable(dave_check) else "unsupported-by-discord-py-version"
+            moderator.log(f"[voice-ai] connected guild={guild.name!r} channel={state.channel.name!r} guild_id={guild.id} caller={interaction.user.id} dave_active={dave_active}.")
             sink = _SpeechSink(interaction.user.id)
             vc.listen(sink)
-            session = {"owner_id": interaction.user.id, "active": True, "vc": vc, "sink": sink}
+            moderator.log(f"[voice-ai] receive listener started guild={guild.name!r} caller_only=true input_format=48kHz_stereo_s16le noise_threshold=100.")
+            session = {"owner_id": interaction.user.id, "active": True, "vc": vc, "sink": sink, "text_channel": interaction.channel, "last_activity": time.monotonic()}
             task = asyncio.create_task(_voice_chat_worker(moderator, guild, interaction.user, vc, sink, session))
             session["task"] = task
             ACTIVE_CHAT_SESSIONS[guild.id] = session
             await interaction.followup.send(
-                f"Joined **{state.channel.name}** and started listening to your voice. Speak naturally; run /chat again to stop. Your speech is sent to Gemini to generate replies.",
+                f"Joined **{state.channel.name}** and started listening to your voice. Speak naturally; run /call again to stop. I will leave after 5 minutes without speech. Your speech is sent to Gemini to generate replies.",
                 ephemeral=True,
             )
+            try:
+                await _speak(vc, "Hi, hello, namaste! I'm Meta AI, ready to chat. What would you like to talk about?")
+            except Exception as exc:
+                moderator.log(f"[voice-ai] initial greeting failed guild={guild.name!r} error_type={type(exc).__name__} detail={str(exc)[:500]!r}")
         except Exception as exc:
-            moderator.log(f"Could not start voice /chat in {guild.name}: {exc}")
+            moderator.log(f"[voice-ai] start failed guild={guild.name!r} error_type={type(exc).__name__} http_status={getattr(exc, 'code', None)} detail={str(exc)[:700]!r}")
             await interaction.followup.send("Could not start voice chat. Check voice receive dependency, bot permissions, and Railway logs.", ephemeral=True)
 

@@ -1063,8 +1063,7 @@ class ModeratorBot:
 
     def vc_ai_allowed(self, member):
         """Permission to use the voice assistant and its explicitly requested actions."""
-        # Keep existing Chat Permissions selections working while the new AI tab is adopted.
-        return self._role_allowed(member, "vc_ai_allowed_roles") or self.chat_allowed(member)
+        return self._role_allowed(member, "vc_ai_allowed_roles")
 
     def role_is_manageable(self, guild, role):
         """Whether this bot can safely add or remove ``role`` in this guild."""
@@ -2196,6 +2195,14 @@ class ModeratorBot:
             await self.handle_counting_message(message)
             asyncio.create_task(self.handle_level_activity(message))
             await bot.process_commands(message)
+        @bot.tree.command(name="chat", description="Open a form and send a message in this channel")
+        @app_commands.guild_only()
+        async def chat(interaction: discord.Interaction):
+            if not self.chat_allowed(interaction.user):
+                return await interaction.response.send_message("You do not have permission to use /chat.", ephemeral=True)
+            if not isinstance(interaction.channel, (discord.TextChannel, discord.Thread)):
+                return await interaction.response.send_message("Use /chat in a text channel or thread.", ephemeral=True)
+            await interaction.response.send_modal(ChatSendModal(self))
         @bot.tree.command(name="help", description="Browse the English guide to the bot's features")
         @app_commands.guild_only()
         async def help_command(interaction: discord.Interaction):
