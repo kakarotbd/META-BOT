@@ -284,15 +284,31 @@ def _find_channel(channels, name):
     return partial[0] if len(partial) == 1 else None
 
 
-async def _speak(vc, text):
+async def _speak(vc, text, store=None):
     import edge_tts
-    temp = tempfile.NamedTemporaryFile(prefix="chat-ai-", suffix=".mp3", delete=False)
-    path = temp.name
-    temp.close()
+    import uuid
+    audio_id = uuid.uuid4().hex
+    local_path = None
+    stored = False
     try:
         print(f"[voice-ai] TTS start chars={len(text)} voice={os.getenv('VC_AI_VOICE', 'en-US-AnaNeural')}", flush=True)
-        await edge_tts.Communicate(text[:500], os.getenv("VC_AI_VOICE", "en-US-AnaNeural"), rate="+5%", pitch="+8Hz").save(path)
-        print(f"[voice-ai] TTS audio ready bytes={os.path.getsize(path)}; sending to Discord", flush=True)
+        temp = tempfile.NamedTemporaryFile(prefix="chat-ai-", suffix=".mp3", delete=False)
+        local_path = temp.name
+        temp.close()
+        await edge_tts.Communicate(text[:500], os.getenv("VC_AI_VOICE", "en-US-AnaNeural"), rate="+5%", pitch="+8Hz").save(local_path)
+        with open(local_path, "rb") as audio_file:
+            audio_bytes = audio_file.read()
+        if store is None or not all(hasattr(store, name) for name in ("save_temporary_voice_audio", "get_temporary_voice_audio", "delete_temporary_voice_audio")):
+            raise RuntimeError("Temporary voice audio storage is unavailable; configure the shared Cloudflare R2 store.")
+        await asyncio.to_thread(store.save_temporary_voice_audio, audio_id, audio_bytes)
+        stored = True
+        _voice_log(f"[voice-ai] TTS MP3 saved encrypted to temporary R2 storage id={audio_id} bytes={len(audio_bytes)}.")
+        audio_bytes = await asyncio.to_thread(store.get_temporary_voice_audio, audio_id)
+        if not audio_bytes:
+            raise RuntimeError("Temporary TTS MP3 was not found in R2 after upload.")
+        with open(local_path, "wb") as audio_file:
+            audio_file.write(audio_bytes)
+        print(f"[voice-ai] TTS audio ready bytes={len(audio_bytes)}; retrieved from temporary storage and sending to Discord", flush=True)
         if not discord.opus.is_loaded():
             opus_library = ctypes.util.find_library("opus") or ("libopus.so.0" if os.name == "posix" else "opus")
             discord.opus.load_opus(opus_library)
@@ -349,17 +365,24 @@ async def _speak(vc, text):
                 playback_error.append(error)
                 print(f"[voice-ai] Discord audio player callback error: {type(error).__name__}: {error}", flush=True)
             loop.call_soon_threadsafe(done.set)
-        source = _MeteredPCMSource(discord.FFmpegPCMAudio(path, options="-vn -af volume=2.0"))
+        source = _MeteredPCMSource(discord.FFmpegPCMAudio(local_path, options="-vn -af volume=2.0"))
         vc.play(source, after=_after_play)
         await asyncio.wait_for(done.wait(), timeout=60)
         if playback_error:
             raise RuntimeError(f"Discord audio playback failed: {playback_error[0]}")
         print("[voice-ai] TTS playback finished without FFmpeg/player error", flush=True)
     finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+        if stored:
+            try:
+                await asyncio.to_thread(store.delete_temporary_voice_audio, audio_id)
+                _voice_log(f"[voice-ai] temporary TTS MP3 deleted from R2 after playback id={audio_id}.")
+            except Exception as exc:
+                _voice_log(f"[voice-ai] temporary TTS MP3 cleanup failed id={audio_id} error_type={type(exc).__name__} detail={str(exc)[:300]!r}.")
+        if local_path:
+            try:
+                os.unlink(local_path)
+            except OSError:
+                pass
 
 
 async def _confirmable_action(guild, caller, result, session):
@@ -511,17 +534,17 @@ async def _voice_chat_worker(moderator, guild, caller, vc, sink, session):
                 else:
                     reply = await _perform_action(guild, caller, result, session)
                     if str(result.get("action", "answer")).lower() == "answer" and heard and _WEB_QUERY.search(heard):
-                        await _speak(vc, "Hold on, just a minute.")
+                        await _speak(vc, "Hold on, just a minute.", moderator.store)
                         reply = await asyncio.to_thread(_gemini_web_answer, heard, history, moderator.store)
                 if heard:
                     history.extend(["User: " + heard, "Assistant: " + reply[:500]])
                 _voice_log(f"[voice-ai] response prepared guild={guild.name!r} reply={reply[:180]!r}; starting TTS playback.")
-                await _speak(vc, reply)
+                await _speak(vc, reply, moderator.store)
             except Exception as exc:
                 _voice_log(f"[voice-ai] turn failed guild={guild.name!r} error_type={type(exc).__name__} http_status={getattr(exc, 'code', None)} reason={getattr(exc, 'reason', None)!r} detail={str(exc)[:500]!r}")
                 if vc.is_connected():
                     try:
-                        await _speak(vc, "I had trouble processing that. Please say it again in a moment.")
+                        await _speak(vc, "I had trouble processing that. Please say it again in a moment.", moderator.store)
                     except Exception:
                         pass
     except asyncio.CancelledError:
@@ -615,7 +638,7 @@ def register(moderator, bot):
                 ephemeral=True,
             )
             try:
-                await _speak(vc, "Hi, hello, namaste! I'm Meta AI, ready to chat. What would you like to talk about?")
+                await _speak(vc, "Hi, hello, namaste! I'm Meta AI, ready to chat. What would you like to talk about?", moderator.store)
             except Exception as exc:
                 _voice_log(f"[voice-ai] initial greeting failed guild={guild.name!r} error_type={type(exc).__name__} detail={str(exc)[:500]!r}")
         except Exception as exc:

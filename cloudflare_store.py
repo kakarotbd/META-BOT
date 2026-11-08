@@ -159,6 +159,29 @@ class CloudflareR2Store:
         v=self._get(c,i)
         if not v:return None
         return v["content_type"],self.s3.get_object(Bucket=self.bucket,Key=v["key"])["Body"].read()
+    def save_temporary_voice_audio(self, ident, data):
+        """Store one encrypted TTS clip in R2 until playback finishes."""
+        ident=str(ident)
+        key=f"{self.root}/temporary/voice-audio/{ident}.mp3"
+        encrypted=self.cipher.encrypt(bytes(data))
+        self.s3.put_object(Bucket=self.bucket,Key=key,Body=encrypted,ContentType="application/octet-stream",CacheControl="no-store")
+        try:
+            self._put("temporary_voice_audio",ident,{"key":key,"size":len(data)})
+        except Exception:
+            self.s3.delete_object(Bucket=self.bucket,Key=key)
+            raise
+        return ident
+    def get_temporary_voice_audio(self, ident):
+        record=self._get("temporary_voice_audio",str(ident))
+        if not record:return None
+        encrypted=self.s3.get_object(Bucket=self.bucket,Key=record["key"])["Body"].read()
+        return self.cipher.decrypt(encrypted)
+    def delete_temporary_voice_audio(self, ident):
+        ident=str(ident)
+        record=self._get("temporary_voice_audio",ident)
+        if record:self.s3.delete_object(Bucket=self.bucket,Key=record["key"])
+        self._delete("temporary_voice_audio",ident)
+        return bool(record)
     def save_welcome_goodbye_image(self,i,t,d):return self._save_image("welcome_goodbye_images",i,t,d)
     def get_welcome_goodbye_image(self,i):return self._get_image("welcome_goodbye_images",i)
     def save_notification_image(self,i,t,d):return self._save_image("notification_images",i,t,d)
