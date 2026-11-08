@@ -12,7 +12,7 @@ import boto3
 from botocore.exceptions import ClientError
 from cryptography.fernet import Fernet, InvalidToken
 
-DEFAULT_SETTINGS = {"token":"", "auto_connect":True, "allowed_roles":{}, "command_allowed_roles":{}, "chat_allowed_roles":{}, "link_allowed_roles":{}, "drag_allowed_roles":{}, "ticket_channels":{}, "ticket_moderators":{}, "temp_voice_lobbies":{}, "welcome_goodbye":{}, "leveling":{}, "role_notifications":{}, "movie_announcements":{}, "default_roles":{}, "default_role_managed_ids":{}, "birthdays":{}, "counting_channels":{}, "word_blocks":{}, "discipline":{}, "custom_commands":{}, "max_warnings_before_timeout":5, "timeout_minutes":10, "settings_revision":1}
+DEFAULT_SETTINGS = {"token":"", "auto_connect":True, "allowed_roles":{}, "command_allowed_roles":{}, "chat_allowed_roles":{}, "link_allowed_roles":{}, "drag_allowed_roles":{}, "vc_ai_allowed_roles":{}, "ticket_channels":{}, "ticket_moderators":{}, "temp_voice_lobbies":{}, "welcome_goodbye":{}, "leveling":{}, "role_notifications":{}, "movie_announcements":{}, "default_roles":{}, "default_role_managed_ids":{}, "birthdays":{}, "counting_channels":{}, "word_blocks":{}, "discipline":{}, "custom_commands":{}, "max_warnings_before_timeout":5, "timeout_minutes":10, "settings_revision":1}
 
 class CloudflareR2Store:
     def __init__(self):
@@ -31,6 +31,15 @@ class CloudflareR2Store:
         try: return json.loads(self.cipher.decrypt(value.encode()).decode())
         except (InvalidToken, ValueError, TypeError, json.JSONDecodeError) as exc: raise RuntimeError("Cannot decrypt R2 data. Check BOT_ENCRYPTION_KEY and BOT_CONTROL_ID.") from exc
     def _key(self, collection, ident): return f"{self.root}/records/{collection}/{ident}.json"
+    def get_r2_usage(self):
+        total=0; token=None
+        while True:
+            args={"Bucket":self.bucket,"Prefix":f"{self.root}/"}
+            if token: args["ContinuationToken"]=token
+            page=self.s3.list_objects_v2(**args)
+            total+=sum(int(item.get("Size",0)) for item in page.get("Contents",[]))
+            if not page.get("IsTruncated"): return total
+            token=page.get("NextContinuationToken")
     def _put(self, collection, ident, value):
         self.s3.put_object(Bucket=self.bucket, Key=self._key(collection, ident), Body=json.dumps({"payload":self._seal(value), "updated_at":datetime.now(timezone.utc).isoformat()}).encode(), ContentType="application/json")
     def _get(self, collection, ident):
@@ -91,7 +100,7 @@ class CloudflareR2Store:
     def _update_settings(self, fn):
         return self._atomic("settings","main",lambda cur: (lambda v: (self._put("settings","main",v),v)[1])(fn(self._normalize_settings(cur or {}))))
     def save_permission_roles(self, name, guild_id, role_ids):
-        if name not in {"command_allowed_roles","chat_allowed_roles","link_allowed_roles","drag_allowed_roles"}: raise ValueError("Unknown permission setting.")
+        if name not in {"command_allowed_roles","chat_allowed_roles","link_allowed_roles","drag_allowed_roles","vc_ai_allowed_roles"}: raise ValueError("Unknown permission setting.")
         return self._update_settings(lambda v: (v[name].update({str(guild_id):[str(x) for x in role_ids]}), v.__setitem__("settings_revision",int(v.get("settings_revision",0))+1), v)[-1])
     def save_welcome_goodbye_config(self,guild_id,config): return self._update_settings(lambda v:(v["welcome_goodbye"].update({str(guild_id):dict(config)}),v.__setitem__("settings_revision",int(v.get("settings_revision",0))+1),v)[-1])
     def save_ticket_moderators(self,guild_id,user_ids):

@@ -1,5 +1,6 @@
 """D1-backed state layer with R2 media inherited from CloudflareR2Store."""
 import json, threading, os, random, time
+import base64
 from datetime import datetime, timezone
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
@@ -47,6 +48,68 @@ class CloudflareD1Store(CloudflareR2Store):
                     continue
                 raise RuntimeError(f"Cloudflare D1 query failed: {errors or result}")
             return result.get("result", [{}])[0]
+
+    def get_database_usage(self):
+        request = Request(f"https://api.cloudflare.com/client/v4/accounts/{self.account_id}/d1/database/{self.d1_database_id}?fields=file_size", headers={"Authorization": f"Bearer {self.d1_api_token}"})
+        try:
+            with urlopen(request, timeout=20) as response:
+                result = json.loads(response.read().decode())
+            if result.get("success") and result.get("result",{}).get("file_size") is not None:
+                return int(result["result"]["file_size"]), False
+        except Exception:
+            pass
+        self._ensure_schema()
+        row=self._query("SELECT COALESCE(SUM(LENGTH(collection)+LENGTH(record_id)+LENGTH(payload)+LENGTH(updated_at)),0) AS bytes FROM records").get("results",[{}])[0]
+        return int(row.get("bytes",0)), True
+
+    def export_snapshot(self, progress=None):
+        self._ensure_schema()
+        rows=[]; offset=0; page_size=500
+        while True:
+            page_rows=self._query("SELECT collection,record_id,payload,updated_at FROM records ORDER BY collection,record_id LIMIT ? OFFSET ?",(page_size,offset)).get("results",[])
+            rows.extend(page_rows)
+            if len(page_rows)<page_size:break
+            offset+=page_size
+        keys=[]; token=None; prefix=f"{self.root}/"
+        while True:
+            args={"Bucket":self.bucket,"Prefix":prefix}
+            if token: args["ContinuationToken"]=token
+            page=self.s3.list_objects_v2(**args)
+            keys.extend(item["Key"] for item in page.get("Contents",[]))
+            if not page.get("IsTruncated"): break
+            token=page.get("NextContinuationToken")
+        objects=[]; total=max(1,len(rows)+len(keys)); done=0
+        for row in rows:
+            done+=1
+            if progress:progress(done,total,"Exporting D1 records")
+        for key in keys:
+            stored=self.s3.get_object(Bucket=self.bucket,Key=key)
+            data=stored["Body"].read()
+            objects.append({"key":key,"data":base64.b64encode(data).decode("ascii"),"content_type":stored.get("ContentType"),"cache_control":stored.get("CacheControl"),"metadata":stored.get("Metadata",{})})
+            done+=1
+            if progress:progress(done,total,"Exporting R2 files")
+        return {"format":"meta-bot-backup","version":1,"control_id":self.control_id,"d1_records":rows,"r2_objects":objects}
+
+    def import_snapshot_item(self, kind, item):
+        if kind=="d1":
+            self._ensure_schema()
+            collection,record_id=str(item["collection"]),str(item["record_id"])
+            payload=str(item["payload"])
+            if collection=="settings" and record_id=="main":
+                restored=self._open(payload)
+                current=self._get("settings","main") or {}
+                restored["settings_revision"]=max(int(restored.get("settings_revision",0)),int(current.get("settings_revision",0)))+1
+                payload=self._seal(restored)
+            self._query("INSERT INTO records(collection,record_id,payload,updated_at) VALUES(?,?,?,?) ON CONFLICT(collection,record_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at",(collection,record_id,payload,str(item["updated_at"])))
+        elif kind=="r2":
+            key=str(item["key"])
+            if not key.startswith(f"{self.root}/"): raise ValueError("Backup contains an object outside this control ID.")
+            args={"Bucket":self.bucket,"Key":key,"Body":base64.b64decode(item["data"],validate=True)}
+            if item.get("content_type"):args["ContentType"]=item["content_type"]
+            if item.get("cache_control"):args["CacheControl"]=item["cache_control"]
+            if item.get("metadata"):args["Metadata"]={str(k):str(v) for k,v in item["metadata"].items()}
+            self.s3.put_object(**args)
+        else: raise ValueError("Unknown backup item type.")
 
     def _ensure_schema(self):
         if not self._schema_ready:

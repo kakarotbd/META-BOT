@@ -20,6 +20,10 @@ Run only **one live Discord gateway connection for each Discord bot token**. If 
    ```
 
    Keep this exact key private. Both the GUI computer and Railway need the same key, otherwise existing Cloudflare R2 data cannot be decrypted.
+
+## Database usage and JSON backup
+
+In the desktop GUI's **Live Logs** tab or header's **All Controls** menu, **Database usage** shows the D1 database file size and the R2 objects used by this bot control ID. **Export all data to JSON** includes encrypted D1 records and all bot R2 objects, including uploaded media. Keep the backup private. Import restores matching records and files from the backup and refreshes the GUI settings; the connected bot detects the new settings revision and syncs. Data in the destination that is not present in the backup is left in place. If an import is interrupted, choose the same JSON file again; the adjacent `.import-progress` checkpoint resumes from the last completed item. Use the same `BOT_ENCRYPTION_KEY` and `BOT_CONTROL_ID` as the source backup.
 5. Install packages:
 
    ```powershell
@@ -35,6 +39,12 @@ Run only **one live Discord gateway connection for each Discord bot token**. If 
    Enter the Discord token and click **Save to Cloudflare R2**. Connect the GUI once to load its server roles, then select allowed roles in **Command Permissions** and save them. Those roles can use `/chat` (and share links); changes are encrypted, logged, and Railway sees them within 10 seconds.
 
 Enable **Message Content Intent** and **Server Members Intent** in the Discord Developer Portal. The generated invite requests **Administrator** permission, which is required for temporary-room creation, permission changes, and moving members.
+
+## VC AI slash assistant
+
+The GUI's **VC AI Permissions** tab controls which roles may use `/call`. A caller runs the slash command in a server text channel while connected to voice. `/call` joins and stays in the caller's current voice channel; it accepts an English request and speaks its reply there using Edge TTS (default `en-US-AnaNeural`, configurable with `VC_AI_VOICE`). Assistant command handling lives in `cmd.py`. It currently supports spoken answers, explicit `kick` and `move` requests, and posting a requested message to a server text channel. For kick/move, select the member in `target`, and select a voice channel in `destination` for moves. To post a message, use `text_channel` or name the text channel clearly in the request; the bot disables role/everyone mentions in posted text. The bot checks its Discord permissions and role hierarchy; protected accounts cannot be kicked. Other Discord features are explained by Gemini but are not executed from free-form text. There is no separate join or leave command; `/call` is the only AI assistant command that joins voice. Requests for current or web information use Gemini Google Search grounding and may consume search quota or incur charges under Google's current pricing.
+
+Configure `GEMINI_API_KEY` in the GUI computer's `.env` and Railway Variables; optionally set `VC_AI_MODEL` (default `gemini-3.8-flash`) and `VC_AI_VOICE`. The bot uses Gemini's `generateContent` REST API with a JSON response schema. Install the updated requirements and deploy the worker so Discord voice support, FFmpeg, and the new command are available. The AI key is not stored in the shared settings document. Keep the GUI disconnected while Railway is the active bot gateway.
 
 ## Discipline voice restrictions
 

@@ -2,10 +2,12 @@ import asyncio
 import concurrent.futures
 import functools
 import io
+import json
 import os
 import re
 import re
 import time
+import tempfile
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from PIL import Image, ImageDraw, ImageFont, ImageOps
@@ -1058,6 +1060,10 @@ class ModeratorBot:
     def drag_allowed(self, member):
         """Permission to use the /drag voice-member mover."""
         return self._role_allowed(member, "drag_allowed_roles")
+
+    def vc_ai_allowed(self, member):
+        """Permission to use the voice assistant and its explicitly requested actions."""
+        return self._role_allowed(member, "vc_ai_allowed_roles")
 
     def role_is_manageable(self, guild, role):
         """Whether this bot can safely add or remove ``role`` in this guild."""
@@ -2257,6 +2263,9 @@ class ModeratorBot:
                 return await interaction.response.send_message("There are no occupied voice channels with human members right now.", ephemeral=True)
             view = MoveActiveVCView(self, interaction.guild, interaction.user.id, active_channels)
             await interaction.response.send_message(embed=view.make_embed(), ephemeral=True, view=view)
+
+        from cmd import register as register_ai_commands
+        register_ai_commands(self, bot)
         return bot
 
     async def run(self, token):

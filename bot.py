@@ -1,5 +1,5 @@
 """Desktop GUI control panel. Settings, warnings, and logs are shared through encrypted Cloudflare R2."""
-import asyncio, calendar, io, os, queue, threading, uuid, webbrowser
+import asyncio, calendar, io, os, queue, threading, uuid, webbrowser, json
 from datetime import date, datetime, timedelta, timezone
 from tzlocal import get_localzone_name
 import tkinter as tk
@@ -131,6 +131,7 @@ class App:
         tk.Button(popup, text="Set time", command=apply).pack(pady=(8, 14))
     def build_header(self, root):
         header = tk.Frame(root, bg=self.PANEL, height=54); header.pack(fill="x", padx=14, pady=(12, 0)); header.pack_propagate(False)
+        self.header = header
         if APP_CONFIG.logo_path.is_file():
             try:
                 logo = Image.open(APP_CONFIG.logo_path); logo.thumbnail((32, 32))
@@ -171,6 +172,7 @@ class App:
         self.chat_permissions_page, self.chat_permissions = self.make_scrollable_tab(tabs)
         self.link_permissions_page, self.link_permissions = self.make_scrollable_tab(tabs)
         self.drag_permissions_page, self.drag_permissions = self.make_scrollable_tab(tabs)
+        self.vc_ai_permissions_page, self.vc_ai_permissions = self.make_scrollable_tab(tabs)
         self.tickets_page, self.tickets_tab = self.make_scrollable_tab(tabs)
         self.voice_page, self.voice_tab = self.make_scrollable_tab(tabs)
         self.greetings_page, self.greetings_tab = self.make_scrollable_tab(tabs)
@@ -184,12 +186,20 @@ class App:
         self.word_block_page, self.word_block_tab = self.make_scrollable_tab(tabs)
         self.discipline_page, self.discipline_tab = self.make_scrollable_tab(tabs)
         self.log_page, self.log_tab = self.make_scrollable_tab(tabs)
-        tabs.add(self.connection_page, text="Overview"); tabs.add(self.custom_commands_page, text="GIF Commands"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.word_block_page, text="Word Block"); tabs.add(self.discipline_page, text="Discipline"); tabs.add(self.log_page, text="Live Logs")
+        tabs.add(self.connection_page, text="Overview"); tabs.add(self.custom_commands_page, text="GIF Commands"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.vc_ai_permissions_page, text="VC AI Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.word_block_page, text="Word Block"); tabs.add(self.discipline_page, text="Discipline"); tabs.add(self.log_page, text="Live Logs")
+        self.build_header_controls(tabs)
         self.notif_entries, self.notif_edit_index = {}, None
-        self.connection_ui(); self.custom_commands_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui(); self.word_block_ui(); self.discipline_ui()
+        self.connection_ui(); self.custom_commands_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.vc_ai_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui(); self.word_block_ui(); self.discipline_ui()
         log_actions = tk.Frame(self.log_tab); log_actions.pack(pady=(8, 0))
         tk.Button(log_actions,text="Load shared Cloudflare R2 logs",command=self.load_logs).pack(side="left", padx=5)
         tk.Button(log_actions, text="Clear logs older than 30 days", command=self.clear_logs_older_than_30_days).pack(side="left", padx=5)
+        db_actions = tk.Frame(self.log_tab); db_actions.pack(pady=(8, 0))
+        tk.Button(db_actions,text="Database usage",command=self.database_usage).pack(side="left", padx=5)
+        tk.Button(db_actions,text="Export all data to JSON",command=self.export_database).pack(side="left", padx=5)
+        tk.Button(db_actions,text="Import JSON (resume supported)",command=self.import_database).pack(side="left", padx=5)
+        self.database_status=tk.Label(self.log_tab,text="D1 database and R2 media usage appear here.",fg=self.MUTED); self.database_status.pack(pady=5)
+        self.database_progress=ttk.Progressbar(self.log_tab,orient="horizontal",mode="determinate",maximum=100,length=520)
+        self.database_progress.pack(pady=(0,8))
         self.logs = scrolledtext.ScrolledText(self.log_tab, state="disabled", height=30); self.logs.pack(fill="both", expand=True, padx=10, pady=10)
         tabs.bind("<MouseWheel>", self.scroll_tabs, add="+"); tabs.bind("<Button-4>", lambda event: self.scroll_tabs(event, -1), add="+"); tabs.bind("<Button-5>", lambda event: self.scroll_tabs(event, 1), add="+")
         root.bind_all("<MouseWheel>", self.scroll_tab, add="+"); root.bind_all("<Shift-MouseWheel>", self.scroll_tabs, add="+"); root.bind_all("<Button-4>", lambda event: self.scroll_tab(event, -1), add="+"); root.bind_all("<Button-5>", lambda event: self.scroll_tab(event, 1), add="+"); root.bind_all("<<ComboboxSelected>>", self.animate_selection, add="+"); root.after(0, self.lock_combobox_wheel)
@@ -198,6 +208,24 @@ class App:
         root.after(15000, self.auto_refresh_tickets)
         if self.settings.get("auto_connect") and self.settings.get("token"):
             root.after(500, self.connect)
+
+    def build_header_controls(self, tabs):
+        menu=tk.Menu(self.header,tearoff=False,bg="#1a2338",fg=self.TEXT,activebackground=self.ACCENT,activeforeground="#ffffff")
+        for index in range(tabs.index("end")):
+            label=tabs.tab(index,"text")
+            menu.add_command(label=label,command=lambda i=index:tabs.select(i))
+        menu.add_separator()
+        menu.add_command(label="Database usage",command=self.database_usage)
+        menu.add_command(label="Export all data to JSON",command=self.export_database)
+        menu.add_command(label="Import JSON backup (resume supported)",command=self.import_database)
+        def show_menu():
+            try:
+                menu.tk_popup(control.winfo_rootx(),control.winfo_rooty()+control.winfo_height())
+            finally:
+                menu.grab_release()
+        control=tk.Button(self.header,text="All Controls  ▾",command=show_menu,bg=self.ACCENT,fg="#ffffff",activebackground="#4752c4",activeforeground="#ffffff",relief="flat",padx=12,pady=6,font=("Segoe UI",9,"bold"),cursor="hand2")
+        control.pack(side="left",padx=(14,6),pady=9)
+        self.header_controls_menu=menu
 
     def connection_ui(self):
         f = self.connection; tk.Label(f, text="Discord token (encrypted before Cloudflare R2 save)").pack(pady=(25,4))
@@ -299,6 +327,20 @@ class App:
         self.drag_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.drag_role_summary.pack(pady=(6,0))
         tk.Label(f,text="Only selected roles can run /move. The bot also needs Discord's Move Members permission.",fg=self.MUTED).pack(pady=(12,2))
         tk.Button(f,text="Save drag permissions to Cloudflare R2",command=self.save_drag_roles,width=34).pack(pady=15)
+    def vc_ai_permissions_ui(self):
+        f=self.vc_ai_permissions
+        tk.Label(f,text="Server").pack(pady=(18,3))
+        self.vc_ai_server=ttk.Combobox(f,state="readonly",width=55); self.vc_ai_server.pack(); self.vc_ai_server.bind("<<ComboboxSelected>>",lambda e:self.show_vc_ai_roles())
+        tk.Label(f,text="Roles allowed to use /call (AI voice and actions)",font=("Segoe UI",12,"bold")).pack(pady=(18,3))
+        self.vc_ai_roles=tk.Listbox(f,selectmode="multiple",width=65,height=16,exportselection=False); self.vc_ai_roles.pack(); self.vc_ai_roles.bind("<<ListboxSelect>>",lambda e:self.update_role_summary(self.vc_ai_roles,self.vc_ai_role_summary))
+        self.vc_ai_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.vc_ai_role_summary.pack(pady=(6,0))
+        tk.Label(f,text="Only selected roles can use /call. It joins and stays in the caller's current VC; bot needs Connect/Speak and action-specific permissions.",wraplength=720,justify="center",fg=self.MUTED).pack(pady=(12,2))
+        tk.Button(f,text="Save VC AI permissions to Cloudflare",command=self.save_vc_ai_roles,width=34).pack(pady=15)
+    def show_vc_ai_roles(self):
+        self.show_permission_roles(self.vc_ai_server,self.vc_ai_roles,"vc_ai_allowed_roles")
+    def save_vc_ai_roles(self):
+        self.save_permission_roles(self.vc_ai_server,self.vc_ai_roles,"vc_ai_allowed_roles","VC AI")
+
     def tickets_ui(self):
         f=self.tickets_tab; top=tk.Frame(f); top.pack(fill="x",pady=10)
         tk.Button(top,text="Refresh encrypted tickets",command=self.load_tickets).pack(side="left",padx=10)
@@ -977,6 +1019,74 @@ class App:
                 self.q.put(("logs_clear_error", str(exc)))
         threading.Thread(target=clear, daemon=True).start()
 
+    @staticmethod
+    def format_bytes(size):
+        value=float(size)
+        for unit in ("B","KB","MB","GB","TB"):
+            if value<1024 or unit=="TB": return f"{value:.1f} {unit}" if unit!="B" else f"{int(value)} B"
+            value/=1024
+
+    def database_usage(self):
+        self.database_status.config(text="Checking Cloudflare storage usage…")
+        self.database_progress["value"]=0
+        def work():
+            try:
+                d1_size,approximate=self.store.get_database_usage()
+                r2_size=self.store.get_r2_usage()
+                self.q.put(("db_usage",(d1_size,r2_size,approximate)))
+            except Exception as exc: self.q.put(("db_error",str(exc)))
+        threading.Thread(target=work,daemon=True).start()
+
+    def export_database(self):
+        path=filedialog.asksaveasfilename(title="Export complete bot backup",defaultextension=".json",filetypes=[("JSON backup","*.json")])
+        if not path:return
+        self.database_status.config(text="Exporting D1 records and R2 files…")
+        self.database_progress["value"]=0
+        def work():
+            try:
+                def progress(done,total,label): self.q.put(("db_progress",(int(done*90/total),f"{label}: {done}/{total}")))
+                backup=self.store.export_snapshot(progress=progress)
+                encoder=json.JSONEncoder(separators=(",",":"))
+                total_bytes=sum(len(chunk.encode("utf-8")) for chunk in encoder.iterencode(backup))
+                written=0; last_percent=90
+                with open(path,"w",encoding="utf-8") as handle:
+                    for chunk in encoder.iterencode(backup):
+                        handle.write(chunk); written+=len(chunk.encode("utf-8"))
+                        percent=90+int(written*9/max(1,total_bytes))
+                        if percent!=last_percent:
+                            self.q.put(("db_progress",(percent,"Writing JSON backup")))
+                            last_percent=percent
+                self.q.put(("db_export_done",(path,len(backup["d1_records"]),len(backup["r2_objects"]))))
+            except Exception as exc:self.q.put(("db_error",str(exc)))
+        threading.Thread(target=work,daemon=True).start()
+
+    def import_database(self):
+        path=filedialog.askopenfilename(title="Choose a META BOT JSON backup",filetypes=[("JSON backup","*.json")])
+        if not path:return
+        if not messagebox.askyesno("Import backup","Restore all records and files from this backup? Matching records/files in this database will be replaced by the backup. Records/files not included in the backup will remain. If interrupted, select this same file again to continue from the saved progress."):return
+        self.database_status.config(text="Importing backup…")
+        self.database_progress["value"]=0
+        def work():
+            try:
+                with open(path,"r",encoding="utf-8") as handle: backup=json.load(handle)
+                if backup.get("format")!="meta-bot-backup" or backup.get("version")!=1: raise ValueError("This JSON is not a supported META BOT backup.")
+                if str(backup.get("control_id",""))!=str(self.store.control_id): raise ValueError("Backup BOT_CONTROL_ID does not match this app. Set the same BOT_CONTROL_ID as the source backup, then retry.")
+                items=[("d1",item) for item in backup.get("d1_records",[])]+[("r2",item) for item in backup.get("r2_objects",[])]
+                checkpoint=path+".import-progress"
+                start=0
+                if os.path.isfile(checkpoint):
+                    with open(checkpoint,"r",encoding="utf-8") as handle:start=int(json.load(handle).get("next",0))
+                if not 0<=start<=len(items): raise ValueError("Import progress file is invalid; remove the .import-progress file to restart.")
+                for index in range(start,len(items)):
+                    kind,item=items[index]; self.store.import_snapshot_item(kind,item)
+                    with open(checkpoint,"w",encoding="utf-8") as handle:json.dump({"next":index+1,"total":len(items)},handle)
+                    percent=int((index+1)*100/max(1,len(items)))
+                    self.q.put(("db_progress",(percent,f"Importing {index+1}/{len(items)}")))
+                if os.path.exists(checkpoint):os.remove(checkpoint)
+                self.q.put(("db_import_done",(len(items),start)))
+            except Exception as exc:self.q.put(("db_error",str(exc)))
+        threading.Thread(target=work,daemon=True).start()
+
     def save_connection(self):
         token=self.token.get().strip()
         if not token: messagebox.showwarning("Token missing","Enter a bot token."); return False
@@ -1001,7 +1111,7 @@ class App:
         for n,role in enumerate(data.get("roles",[])):
             role_list.insert(tk.END,role["name"])
             if role["id"] in allowed: role_list.selection_set(n)
-        summaries={self.chat_roles:self.chat_role_summary,self.link_roles:self.link_role_summary,self.drag_roles:self.drag_role_summary}
+        summaries={self.chat_roles:self.chat_role_summary,self.link_roles:self.link_role_summary,self.drag_roles:self.drag_role_summary,self.vc_ai_roles:self.vc_ai_role_summary}
         self.update_role_summary(role_list, summaries[role_list])
 
     def update_role_summary(self, role_list, label):
@@ -1574,10 +1684,10 @@ class App:
                 kind,data=self.q.get_nowait()
                 if kind=="log": self.logs.config(state="normal"); self.logs.insert(tk.END,data+"\n"); self.logs.see(tk.END); self.logs.config(state="disabled")
                 elif kind=="guilds":
-                    self.guilds=data; values=[f"{name} ({gid})" for gid,name in data]; self.custom_server["values"]=values; self.chat_server["values"]=values; self.link_server["values"]=values; self.drag_server["values"]=values; self.mod_guild["values"]=values; self.ticket_server["values"]=values; self.voice_server["values"]=values; self.greeting_server["values"]=values; self.level_server["values"]=values; self.counting_server["values"]=values; self.birthday_server["values"]=values; self.notif_server["values"]=values; self.movie_server["values"]=values; self.default_role_server["values"]=values; self.word_block_server["values"]=values; self.discipline_server["values"]=values
-                    if data: self.custom_server.current(0); self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0); self.discipline_server.current(0); self.refresh_discipline_users()
+                    self.guilds=data; values=[f"{name} ({gid})" for gid,name in data]; self.custom_server["values"]=values; self.chat_server["values"]=values; self.link_server["values"]=values; self.drag_server["values"]=values; self.vc_ai_server["values"]=values; self.mod_guild["values"]=values; self.ticket_server["values"]=values; self.voice_server["values"]=values; self.greeting_server["values"]=values; self.level_server["values"]=values; self.counting_server["values"]=values; self.birthday_server["values"]=values; self.notif_server["values"]=values; self.movie_server["values"]=values; self.default_role_server["values"]=values; self.word_block_server["values"]=values; self.discipline_server["values"]=values
+                    if data: self.custom_server.current(0); self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.vc_ai_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0); self.discipline_server.current(0); self.refresh_discipline_users()
                     self.set_status("Connected")
-                elif kind=="guild": self.info[data["id"]]=data; self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks(); self.refresh_discipline_users()
+                elif kind=="guild": self.info[data["id"]]=data; self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.show_vc_ai_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks(); self.refresh_discipline_users()
                 elif kind=="ticket_moderator_verified":
                     user_id = data["id"]
                     if user_id in self.ticket_moderator_ids:
@@ -1599,7 +1709,7 @@ class App:
                         # Keep every settings tab aligned with Cloudflare R2, not only
                         # permission and Auto Role tabs. This is the same shared
                         # document Railway reads on its 10-second refresh cycle.
-                        self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks()
+                        self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.show_vc_ai_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks()
                         self.header_subtitle.config(text="Settings synchronized from Cloudflare R2",fg=self.SUCCESS)
                 elif kind=="settings_sync_error": self.settings_sync_inflight=False
                 elif kind=="logs_cleared":
@@ -1607,6 +1717,36 @@ class App:
                     self.load_logs()
                     messagebox.showinfo("Logs cleared", f"Deleted {data} Cloudflare R2 log(s) older than 30 days.")
                 elif kind=="logs_clear_error": messagebox.showerror("Log cleanup error", data)
+                elif kind=="db_usage":
+                    d1_size,r2_size,approximate=data
+                    label="D1 record estimate" if approximate else "D1 used"
+                    self.database_status.config(text=f"{label}: {self.format_bytes(d1_size)}  |  R2 bot data used: {self.format_bytes(r2_size)}")
+                    self.database_progress["value"]=100
+                elif kind=="db_export_done":
+                    path,records,objects=data
+                    self.database_progress["value"]=100
+                    self.database_status.config(text=f"Export complete: {records} D1 records, {objects} R2 objects.")
+                    messagebox.showinfo("Backup exported",f"Complete JSON backup saved to:\n{path}\n\nKeep this file private; it contains all bot data and uploaded media.")
+                elif kind=="db_import_done":
+                    count,start=data
+                    self.database_progress["value"]=100
+                    self.database_status.config(text=f"Import complete: {count} items processed; resumed from item {start+1}.")
+                    try:
+                        self.settings=self.store.get_settings()
+                        self.token.delete(0,tk.END); self.token.insert(0,self.settings.get("token",""))
+                        self.auto.set(bool(self.settings.get("auto_connect",True)))
+                        self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.show_vc_ai_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks(); self.refresh_discipline_users()
+                    except Exception as exc:
+                        self.log(f"Imported settings but could not refresh every GUI panel: {exc}")
+                    messagebox.showinfo("Backup imported",f"Processed {count} backup items. Matching records and files were restored from the backup. The GUI has reloaded its settings; the connected bot should synchronize shortly.")
+                elif kind=="db_progress":
+                    percent,label=data
+                    self.database_progress["value"]=percent
+                    self.database_status.config(text=f"{label} — {percent}%")
+                elif kind=="db_error":
+                    self.database_progress["value"]=0
+                    self.database_status.config(text="Database operation failed.")
+                    messagebox.showerror("Database error",data)
                 elif kind=="refresh_tickets": self.load_tickets()
                 elif kind=="default_role_progress":
                     percent,done,total=data; self.default_role_progress["value"]=percent
