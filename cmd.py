@@ -297,6 +297,31 @@ async def _speak(vc, text):
             opus_library = ctypes.util.find_library("opus") or ("libopus.so.0" if os.name == "posix" else "opus")
             discord.opus.load_opus(opus_library)
         print(f"[voice-ai] Discord Opus encoder loaded={discord.opus.is_loaded()}", flush=True)
+        connection = getattr(vc, "_connection", None)
+        started_waiting = time.monotonic()
+        saw_dave = False
+        dave_checked = bool(getattr(vc, "_voice_ai_dave_checked", False))
+        while connection is not None and time.monotonic() - started_waiting < 15:
+            protocol = int(getattr(connection, "dave_protocol_version", 0) or 0)
+            dave_session = getattr(connection, "dave_session", None)
+            can_encrypt = bool(getattr(connection, "can_encrypt", False))
+            if protocol > 0:
+                saw_dave = True
+                if can_encrypt:
+                    vc._voice_ai_dave_checked = True
+                    print(f"[voice-ai] DAVE ready protocol={protocol} session_ready={bool(getattr(dave_session, 'ready', False))}; sending TTS", flush=True)
+                    break
+            elif dave_checked:
+                print("[voice-ai] DAVE status already checked; sending in negotiated legacy mode", flush=True)
+                break
+            elif not saw_dave and time.monotonic() - started_waiting >= 3:
+                vc._voice_ai_dave_checked = True
+                print("[voice-ai] no DAVE protocol negotiated after grace period; sending in negotiated legacy mode", flush=True)
+                break
+            await asyncio.sleep(0.1)
+        else:
+            if saw_dave:
+                raise RuntimeError("Discord DAVE encryption did not become ready; refusing to send inaudible voice audio.")
         done = asyncio.Event()
         loop = asyncio.get_running_loop()
         playback_error = []
@@ -551,9 +576,11 @@ def register(moderator, bot):
             if current and current.is_connected():
                 await current.disconnect(force=True)
             vc = await state.channel.connect(cls=voice_recv.VoiceRecvClient)
-            dave_check = getattr(vc, "is_dave_connection", None)
-            dave_active = dave_check() if callable(dave_check) else "unsupported-by-discord-py-version"
-            _voice_log(f"[voice-ai] connected guild={guild.name!r} channel={state.channel.name!r} guild_id={guild.id} caller={interaction.user.id} dave_active={dave_active}.")
+            connection = getattr(vc, "_connection", None)
+            dave_protocol = getattr(connection, "dave_protocol_version", 0) if connection else 0
+            dave_session = getattr(connection, "dave_session", None) if connection else None
+            dave_ready = bool(getattr(connection, "can_encrypt", False)) if connection else False
+            _voice_log(f"[voice-ai] connected guild={guild.name!r} channel={state.channel.name!r} guild_id={guild.id} caller={interaction.user.id} dave_protocol={dave_protocol} dave_ready={dave_ready} dave_session_ready={bool(getattr(dave_session, 'ready', False))}.")
             sink = _SpeechSink(interaction.user.id)
             vc.listen(sink)
             _voice_log(f"[voice-ai] receive listener started guild={guild.name!r} caller_only=true input_format=48kHz_stereo_s16le mean_abs_threshold=55 min_utterance_bytes=16000.")
