@@ -301,12 +301,21 @@ async def _speak(vc, text):
         started_waiting = time.monotonic()
         saw_dave = False
         dave_checked = bool(getattr(vc, "_voice_ai_dave_checked", False))
+        last_dave_log = 0.0
         while connection is not None and time.monotonic() - started_waiting < 15:
             protocol = int(getattr(connection, "dave_protocol_version", 0) or 0)
             dave_session = getattr(connection, "dave_session", None)
             can_encrypt = bool(getattr(connection, "can_encrypt", False))
             if protocol > 0:
                 saw_dave = True
+                if time.monotonic() - last_dave_log >= 5:
+                    _voice_log(
+                        f"[voice-ai] waiting for DAVE handshake protocol={protocol} "
+                        f"session_exists={dave_session is not None} "
+                        f"session_ready={bool(getattr(dave_session, 'ready', False))} "
+                        f"pending_transitions={len(getattr(connection, 'dave_pending_transitions', {}) or {})}."
+                    )
+                    last_dave_log = time.monotonic()
                 if can_encrypt:
                     vc._voice_ai_dave_checked = True
                     print(f"[voice-ai] DAVE ready protocol={protocol} session_ready={bool(getattr(dave_session, 'ready', False))}; sending TTS", flush=True)
@@ -321,7 +330,15 @@ async def _speak(vc, text):
             await asyncio.sleep(0.1)
         else:
             if saw_dave:
-                raise RuntimeError("Discord DAVE encryption did not become ready; refusing to send inaudible voice audio.")
+                protocol = int(getattr(connection, "dave_protocol_version", 0) or 0)
+                dave_session = getattr(connection, "dave_session", None)
+                raise RuntimeError(
+                    "Discord DAVE encryption did not become ready after 15s "
+                    f"(protocol={protocol}, session_exists={dave_session is not None}, "
+                    f"session_ready={bool(getattr(dave_session, 'ready', False))}, "
+                    f"pending_transitions={len(getattr(connection, 'dave_pending_transitions', {}) or {})}); "
+                    "check davey installation and DAVE websocket events."
+                )
         done = asyncio.Event()
         loop = asyncio.get_running_loop()
         playback_error = []
@@ -518,7 +535,12 @@ async def _voice_chat_worker(moderator, guild, caller, vc, sink, session):
 def register(moderator, bot):
     """Register the single /call command; it toggles voice AI on/off."""
     api_key = _api_key(moderator.store)
-    _voice_log(f"[voice-ai] startup config Gemini key={'present' if api_key else 'missing'} source={_API_KEY_SOURCE!r} (value hidden), model={os.getenv('VC_AI_MODEL', 'gemini-3.8-flash')}, TTS voice={os.getenv('VC_AI_VOICE', 'en-US-AnaNeural')}, idle_disconnect_seconds={IDLE_DISCONNECT_SECONDS}.")
+    try:
+        import davey
+        dave_status = f"available version={getattr(davey, '__version__', 'unknown')}"
+    except Exception as exc:
+        dave_status = f"missing ({type(exc).__name__}: {exc})"
+    _voice_log(f"[voice-ai] startup config Gemini key={'present' if api_key else 'missing'} source={_API_KEY_SOURCE!r} (value hidden), model={os.getenv('VC_AI_MODEL', 'gemini-3.8-flash')}, TTS voice={os.getenv('VC_AI_VOICE', 'en-US-AnaNeural')}, davey={dave_status}, idle_disconnect_seconds={IDLE_DISCONNECT_SECONDS}.")
     if voice_recv is None:
         _voice_log(f"[voice-ai] voice receive extension unavailable in {moderator.source} runtime: {_VOICE_RECV_IMPORT_ERROR}. Bot controls can still connect; /call is handled by a runtime with voice receive installed.")
     @bot.tree.command(name="call", description="Start or stop the voice AI chat in your current voice channel")
