@@ -1,6 +1,7 @@
 """Voice-only Gemini assistant and its allowed Discord control actions."""
 import asyncio
 import base64
+import ctypes.util
 import json
 import os
 import re
@@ -125,6 +126,37 @@ class _SpeechSink(_AudioSinkBase):
     def cleanup(self):
         with self.lock:
             self.buffer.clear()
+
+
+class _MeteredPCMSource(discord.AudioSource):
+    """Report whether FFmpeg decoded real, non-silent TTS PCM before Discord sends it."""
+    def __init__(self, source):
+        self.source = source
+        self.byte_count = 0
+        self.sample_count = 0
+        self.peak = 0
+        self.sum_squares = 0
+
+    def read(self):
+        pcm = self.source.read()
+        if not pcm:
+            rms = (self.sum_squares / self.sample_count) ** 0.5 if self.sample_count else 0
+            print(f"[voice-ai] TTS PCM meter bytes={self.byte_count} samples={self.sample_count} peak={self.peak} rms={rms:.1f}", flush=True)
+            return pcm
+        samples = array("h")
+        samples.frombytes(pcm[:len(pcm) - (len(pcm) % 2)])
+        if samples:
+            self.byte_count += len(pcm)
+            self.sample_count += len(samples)
+            self.peak = max(self.peak, max(abs(sample) for sample in samples))
+            self.sum_squares += sum(sample * sample for sample in samples)
+        return pcm
+
+    def is_opus(self):
+        return False
+
+    def cleanup(self):
+        self.source.cleanup()
 
 
 def _gemini_audio_request(pcm, history, pending_action=None, store=None):
@@ -261,6 +293,10 @@ async def _speak(vc, text):
         print(f"[voice-ai] TTS start chars={len(text)} voice={os.getenv('VC_AI_VOICE', 'en-US-AnaNeural')}", flush=True)
         await edge_tts.Communicate(text[:500], os.getenv("VC_AI_VOICE", "en-US-AnaNeural"), rate="+5%", pitch="+8Hz").save(path)
         print(f"[voice-ai] TTS audio ready bytes={os.path.getsize(path)}; sending to Discord", flush=True)
+        if not discord.opus.is_loaded():
+            opus_library = ctypes.util.find_library("opus") or ("libopus.so.0" if os.name == "posix" else "opus")
+            discord.opus.load_opus(opus_library)
+        print(f"[voice-ai] Discord Opus encoder loaded={discord.opus.is_loaded()}", flush=True)
         done = asyncio.Event()
         loop = asyncio.get_running_loop()
         playback_error = []
@@ -271,9 +307,8 @@ async def _speak(vc, text):
                 playback_error.append(error)
                 print(f"[voice-ai] Discord audio player callback error: {type(error).__name__}: {error}", flush=True)
             loop.call_soon_threadsafe(done.set)
-        # Ask FFmpeg to encode Opus itself. This avoids depending on the host's
-        # discord.py/libopus PCM encoder and sends a standard Opus stream to VC.
-        vc.play(discord.FFmpegOpusAudio(path, bitrate=128, options="-vn -af volume=2.0"), after=_after_play)
+        source = _MeteredPCMSource(discord.FFmpegPCMAudio(path, options="-vn -af volume=2.0"))
+        vc.play(source, after=_after_play)
         await asyncio.wait_for(done.wait(), timeout=60)
         if playback_error:
             raise RuntimeError(f"Discord audio playback failed: {playback_error[0]}")
