@@ -12,7 +12,7 @@ import boto3
 from botocore.exceptions import ClientError
 from cryptography.fernet import Fernet, InvalidToken
 
-DEFAULT_SETTINGS = {"token":"", "vc_ai_api_key":"", "auto_connect":True, "allowed_roles":{}, "command_allowed_roles":{}, "chat_allowed_roles":{}, "link_allowed_roles":{}, "drag_allowed_roles":{}, "vc_ai_allowed_roles":{}, "ticket_channels":{}, "ticket_moderators":{}, "temp_voice_lobbies":{}, "welcome_goodbye":{}, "leveling":{}, "role_notifications":{}, "movie_announcements":{}, "default_roles":{}, "default_role_managed_ids":{}, "birthdays":{}, "counting_channels":{}, "word_blocks":{}, "discipline":{}, "custom_commands":{}, "max_warnings_before_timeout":5, "timeout_minutes":10, "settings_revision":1}
+DEFAULT_SETTINGS = {"token":"", "auto_connect":True, "allowed_roles":{}, "command_allowed_roles":{}, "chat_allowed_roles":{}, "link_allowed_roles":{}, "drag_allowed_roles":{}, "ticket_channels":{}, "ticket_moderators":{}, "temp_voice_lobbies":{}, "welcome_goodbye":{}, "leveling":{}, "role_notifications":{}, "movie_announcements":{}, "default_roles":{}, "default_role_managed_ids":{}, "birthdays":{}, "counting_channels":{}, "word_blocks":{}, "discipline":{}, "custom_commands":{}, "max_warnings_before_timeout":5, "timeout_minutes":10, "settings_revision":1}
 
 class CloudflareR2Store:
     def __init__(self):
@@ -100,7 +100,7 @@ class CloudflareR2Store:
     def _update_settings(self, fn):
         return self._atomic("settings","main",lambda cur: (lambda v: (self._put("settings","main",v),v)[1])(fn(self._normalize_settings(cur or {}))))
     def save_permission_roles(self, name, guild_id, role_ids):
-        if name not in {"command_allowed_roles","chat_allowed_roles","link_allowed_roles","drag_allowed_roles","vc_ai_allowed_roles"}: raise ValueError("Unknown permission setting.")
+        if name not in {"command_allowed_roles","chat_allowed_roles","link_allowed_roles","drag_allowed_roles"}: raise ValueError("Unknown permission setting.")
         return self._update_settings(lambda v: (v[name].update({str(guild_id):[str(x) for x in role_ids]}), v.__setitem__("settings_revision",int(v.get("settings_revision",0))+1), v)[-1])
     def save_welcome_goodbye_config(self,guild_id,config): return self._update_settings(lambda v:(v["welcome_goodbye"].update({str(guild_id):dict(config)}),v.__setitem__("settings_revision",int(v.get("settings_revision",0))+1),v)[-1])
     def save_ticket_moderators(self,guild_id,user_ids):
@@ -159,29 +159,6 @@ class CloudflareR2Store:
         v=self._get(c,i)
         if not v:return None
         return v["content_type"],self.s3.get_object(Bucket=self.bucket,Key=v["key"])["Body"].read()
-    def save_temporary_voice_audio(self, ident, data):
-        """Store one encrypted TTS clip in R2 until playback finishes."""
-        ident=str(ident)
-        key=f"{self.root}/temporary/voice-audio/{ident}.mp3"
-        encrypted=self.cipher.encrypt(bytes(data))
-        self.s3.put_object(Bucket=self.bucket,Key=key,Body=encrypted,ContentType="application/octet-stream",CacheControl="no-store")
-        try:
-            self._put("temporary_voice_audio",ident,{"key":key,"size":len(data)})
-        except Exception:
-            self.s3.delete_object(Bucket=self.bucket,Key=key)
-            raise
-        return ident
-    def get_temporary_voice_audio(self, ident):
-        record=self._get("temporary_voice_audio",str(ident))
-        if not record:return None
-        encrypted=self.s3.get_object(Bucket=self.bucket,Key=record["key"])["Body"].read()
-        return self.cipher.decrypt(encrypted)
-    def delete_temporary_voice_audio(self, ident):
-        ident=str(ident)
-        record=self._get("temporary_voice_audio",ident)
-        if record:self.s3.delete_object(Bucket=self.bucket,Key=record["key"])
-        self._delete("temporary_voice_audio",ident)
-        return bool(record)
     def save_welcome_goodbye_image(self,i,t,d):return self._save_image("welcome_goodbye_images",i,t,d)
     def get_welcome_goodbye_image(self,i):return self._get_image("welcome_goodbye_images",i)
     def save_notification_image(self,i,t,d):return self._save_image("notification_images",i,t,d)

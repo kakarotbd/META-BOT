@@ -22,10 +22,7 @@ async def run_forever():
     delay = 5
     while True:
         try:
-            # The shared encrypted token is authoritative so GUI and Railway
-            # reconnect with the same bot after a token change. The env var is
-            # retained only as a bootstrap fallback for older configurations.
-            token = str(store.get_settings().get("token", "") or "").strip() or os.getenv("DISCORD_BOT_TOKEN", "").strip()
+            token = os.getenv("DISCORD_BOT_TOKEN", "").strip() or store.get_settings()["token"]
             if not token:
                 raise RuntimeError("No Discord token in encrypted Cloudflare R2 settings or DISCORD_BOT_TOKEN.")
             delay = 5  # A successful Discord connection resets reconnect backoff.

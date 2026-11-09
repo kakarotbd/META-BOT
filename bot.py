@@ -5,10 +5,10 @@ from tzlocal import get_localzone_name
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from PIL import Image, ImageSequence, ImageTk
-from dotenv import load_dotenv, set_key
+from dotenv import load_dotenv
 from bot_core import ModeratorBot, DEFAULT_TICKET_CLOSE_NOTE
 from d1_store import CloudflareD1Store
-from app_config import APP_CONFIG, PROJECT_ROOT
+from app_config import APP_CONFIG
 load_dotenv()
 
 MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024  # Non-GIF limit only; original GIFs are stored in R2.
@@ -146,7 +146,7 @@ class App:
         self.header_status.pack(side="right", padx=14, pady=11)
 
     def set_status(self, value):
-        online = str(value).lower() == "connected" or "connecting" in str(value).lower() or "reconnecting" in str(value).lower()
+        online = str(value).lower() == "connected" or "connecting" in str(value).lower()
         self.status.config(text=f"Status: {value}")
         self.header_status.config(text=f"?-? {str(value).upper()}", bg="#123b31" if online else "#2a1830", fg=self.SUCCESS if online else "#ff7b8a")
     def animate_status(self):
@@ -172,7 +172,6 @@ class App:
         self.chat_permissions_page, self.chat_permissions = self.make_scrollable_tab(tabs)
         self.link_permissions_page, self.link_permissions = self.make_scrollable_tab(tabs)
         self.drag_permissions_page, self.drag_permissions = self.make_scrollable_tab(tabs)
-        self.vc_ai_permissions_page, self.vc_ai_permissions = self.make_scrollable_tab(tabs)
         self.tickets_page, self.tickets_tab = self.make_scrollable_tab(tabs)
         self.voice_page, self.voice_tab = self.make_scrollable_tab(tabs)
         self.greetings_page, self.greetings_tab = self.make_scrollable_tab(tabs)
@@ -186,10 +185,10 @@ class App:
         self.word_block_page, self.word_block_tab = self.make_scrollable_tab(tabs)
         self.discipline_page, self.discipline_tab = self.make_scrollable_tab(tabs)
         self.log_page, self.log_tab = self.make_scrollable_tab(tabs)
-        tabs.add(self.connection_page, text="Overview"); tabs.add(self.custom_commands_page, text="GIF Commands"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.vc_ai_permissions_page, text="VC AI Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.word_block_page, text="Word Block"); tabs.add(self.discipline_page, text="Discipline"); tabs.add(self.log_page, text="Live Logs")
+        tabs.add(self.connection_page, text="Overview"); tabs.add(self.custom_commands_page, text="GIF Commands"); tabs.add(self.chat_permissions_page, text="Chat"); tabs.add(self.link_permissions_page, text="Link Send"); tabs.add(self.drag_permissions_page, text="Drag Permissions"); tabs.add(self.tickets_page, text="Tickets"); tabs.add(self.voice_page, text="Voice"); tabs.add(self.greetings_page, text="Greetings"); tabs.add(self.leveling_page, text="Leveling"); tabs.add(self.counting_page, text="Counting"); tabs.add(self.birthday_page, text="Birthdays"); tabs.add(self.notifications_page, text="Notifications"); tabs.add(self.movie_page, text="Movies"); tabs.add(self.default_roles_page, text="Auto Roles"); tabs.add(self.moderation_page, text="Moderation"); tabs.add(self.word_block_page, text="Word Block"); tabs.add(self.discipline_page, text="Discipline"); tabs.add(self.log_page, text="Live Logs")
         self.build_header_controls(tabs)
         self.notif_entries, self.notif_edit_index = {}, None
-        self.connection_ui(); self.custom_commands_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.vc_ai_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui(); self.word_block_ui(); self.discipline_ui()
+        self.connection_ui(); self.custom_commands_ui(); self.chat_permissions_ui(); self.link_permissions_ui(); self.drag_permissions_ui(); self.tickets_ui(); self.voice_ui(); self.greetings_ui(); self.leveling_ui(); self.counting_ui(); self.birthday_ui(); self.notifications_ui(); self.movie_ui(); self.default_roles_ui(); self.moderation_ui(); self.word_block_ui(); self.discipline_ui()
         log_actions = tk.Frame(self.log_tab); log_actions.pack(pady=(8, 0))
         tk.Button(log_actions,text="Load shared Cloudflare R2 logs",command=self.load_logs).pack(side="left", padx=5)
         tk.Button(log_actions, text="Clear logs older than 30 days", command=self.clear_logs_older_than_30_days).pack(side="left", padx=5)
@@ -305,7 +304,7 @@ class App:
     def chat_permissions_ui(self):
         f=self.chat_permissions; tk.Label(f,text="Server").pack(pady=(18,3))
         self.chat_server=ttk.Combobox(f,state="readonly",width=55); self.chat_server.pack(); self.chat_server.bind("<<ComboboxSelected>>",lambda e:self.show_chat_roles())
-        tk.Label(f,text="Roles allowed to use the /chat text-message feature",font=("Segoe UI", 12, "bold")).pack(pady=(18,3))
+        tk.Label(f,text="Roles allowed to use the /chat message feature",font=("Segoe UI", 12, "bold")).pack(pady=(18,3))
         self.chat_roles=tk.Listbox(f,selectmode="multiple",width=65,height=16,exportselection=False); self.chat_roles.pack(); self.chat_roles.bind("<<ListboxSelect>>", lambda event: self.update_role_summary(self.chat_roles, self.chat_role_summary))
         self.chat_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.chat_role_summary.pack(pady=(6,0))
         tk.Label(f,text="This permission controls /chat only; it never filters or deletes normal messages.",fg=self.MUTED).pack(pady=(12,2))
@@ -327,55 +326,6 @@ class App:
         self.drag_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.drag_role_summary.pack(pady=(6,0))
         tk.Label(f,text="Only selected roles can run /move. The bot also needs Discord's Move Members permission.",fg=self.MUTED).pack(pady=(12,2))
         tk.Button(f,text="Save drag permissions to Cloudflare R2",command=self.save_drag_roles,width=34).pack(pady=15)
-    def vc_ai_permissions_ui(self):
-        f=self.vc_ai_permissions
-        tk.Label(f,text="Gemini VC Assistant",font=("Segoe UI",15,"bold")).pack(pady=(22,6))
-        tk.Label(f,text="Save the Gemini API key in encrypted shared Cloudflare settings. Both this GUI bot and the Railway worker read the same key automatically; it is not shown in logs.",wraplength=760,justify="center",fg=self.MUTED).pack(pady=(0,14))
-        api_form=tk.Frame(f); api_form.pack(pady=4)
-        tk.Label(api_form,text="Gemini API key:").grid(row=0,column=0,padx=6,pady=6,sticky="e")
-        self.vc_ai_api_key=tk.Entry(api_form,width=56,show="*"); self.vc_ai_api_key.grid(row=0,column=1,padx=6,pady=6)
-        saved_ai_key=self.settings.get("vc_ai_api_key") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if saved_ai_key:
-            self.vc_ai_api_key.insert(0,saved_ai_key)
-        tk.Label(api_form,text="Model:").grid(row=1,column=0,padx=6,pady=6,sticky="e")
-        self.vc_ai_model=tk.Entry(api_form,width=56); self.vc_ai_model.grid(row=1,column=1,padx=6,pady=6)
-        self.vc_ai_model.insert(0,os.getenv("VC_AI_MODEL","gemini-3.8-flash"))
-        tk.Label(api_form,text="TTS voice:").grid(row=2,column=0,padx=6,pady=6,sticky="e")
-        self.vc_ai_voice=tk.Entry(api_form,width=56); self.vc_ai_voice.grid(row=2,column=1,padx=6,pady=6)
-        self.vc_ai_voice.insert(0,os.getenv("VC_AI_VOICE","en-US-AnaNeural"))
-        tk.Button(f,text="Save AI settings to encrypted Cloudflare",command=self.save_vc_ai_config,width=38).pack(pady=(6,18))
-        ttk.Separator(f,orient="horizontal").pack(fill="x",padx=42,pady=(0,12))
-        tk.Label(f,text="Server").pack(pady=(18,3))
-        self.vc_ai_server=ttk.Combobox(f,state="readonly",width=55); self.vc_ai_server.pack(); self.vc_ai_server.bind("<<ComboboxSelected>>",lambda e:self.show_vc_ai_roles())
-        tk.Label(f,text="Roles allowed to start /call voice AI",font=("Segoe UI",12,"bold")).pack(pady=(18,3))
-        self.vc_ai_roles=tk.Listbox(f,selectmode="multiple",width=65,height=16,exportselection=False); self.vc_ai_roles.pack(); self.vc_ai_roles.bind("<<ListboxSelect>>",lambda e:self.update_role_summary(self.vc_ai_roles,self.vc_ai_role_summary))
-        self.vc_ai_role_summary=tk.Label(f,text="Selected roles: none",fg=self.TEXT,bg="#080c16",relief="solid",bd=1,padx=10,pady=7,wraplength=700,justify="center"); self.vc_ai_role_summary.pack(pady=(6,0))
-        tk.Label(f,text="Only selected roles can start or stop /call. It joins your VC, listens to your speech, and answers automatically; bot needs Connect/Speak and action-specific permissions.",wraplength=720,justify="center",fg=self.MUTED).pack(pady=(12,2))
-        tk.Button(f,text="Save VC AI permissions to Cloudflare",command=self.save_vc_ai_roles,width=34).pack(pady=15)
-    def save_vc_ai_config(self):
-        key=self.vc_ai_api_key.get().strip() or str(self.settings.get("vc_ai_api_key", "")).strip()
-        model=self.vc_ai_model.get().strip() or "gemini-3.8-flash"
-        voice=self.vc_ai_voice.get().strip() or "en-US-AnaNeural"
-        try:
-            if key:
-                self.settings["vc_ai_api_key"]=key
-            self.settings=self.store.save_settings(self.settings)
-            if self.runtime:
-                self.runtime.settings=self.settings
-            if key:
-                set_key(str(PROJECT_ROOT / ".env"),"GEMINI_API_KEY",key)
-                os.environ["GEMINI_API_KEY"]=key
-            for name,value in (("VC_AI_MODEL",model),("VC_AI_VOICE",voice)):
-                set_key(str(PROJECT_ROOT / ".env"),name,value)
-                os.environ[name]=value
-        except Exception as exc:
-            return messagebox.showerror("Save failed",f"Could not save encrypted shared AI settings: {exc}")
-        messagebox.showinfo("Saved","Gemini API key saved in encrypted Cloudflare settings. GUI and Railway will read the shared key automatically. Model and voice defaults are also saved to this computer's .env.")
-    def show_vc_ai_roles(self):
-        self.show_permission_roles(self.vc_ai_server,self.vc_ai_roles,"vc_ai_allowed_roles")
-    def save_vc_ai_roles(self):
-        self.save_permission_roles(self.vc_ai_server,self.vc_ai_roles,"vc_ai_allowed_roles","VC AI")
-
     def tickets_ui(self):
         f=self.tickets_tab; top=tk.Frame(f); top.pack(fill="x",pady=10)
         tk.Button(top,text="Refresh encrypted tickets",command=self.load_tickets).pack(side="left",padx=10)
@@ -1132,31 +1082,11 @@ class App:
     def connect(self):
         if self.thread or not self.save_connection(): return
         def run():
-            delay=5
-            final_status="Disconnected"
-            while True:
-                try:
-                    fresh_settings=self.store.get_settings()
-                    self.settings=fresh_settings
-                    token=str(fresh_settings.get("token", "")).strip()
-                    if not token:
-                        raise RuntimeError("No Discord token is saved in shared Cloudflare settings.")
-                    self.runtime=ModeratorBot(self.store,"gui",self.log,lambda kind,data:self.q.put((kind,data)))
-                    asyncio.run(self.runtime.run(token))
-                    self.q.put(("log","GUI Discord gateway ended; reconnecting."))
-                except Exception as exc:
-                    self.q.put(("log",f"GUI connection error ({type(exc).__name__}): {exc}"))
-                    if type(exc).__name__ in {"LoginFailure", "PrivilegedIntentsRequired"}:
-                        final_status=f"Disconnected ({type(exc).__name__})"
-                        break
-                finally:
-                    self.runtime=None
-                self.q.put(("status",f"Reconnecting in {delay}s"))
-                if self.thread is None: break
-                threading.Event().wait(delay)
-                delay=min(delay*2,180)
-            self.thread=None
-            self.q.put(("status",final_status))
+            try:
+                self.runtime=ModeratorBot(self.store,"gui",self.log,lambda kind,data:self.q.put((kind,data)))
+                asyncio.run(self.runtime.run(self.settings["token"]))
+            except Exception as exc: self.q.put(("log",f"Connection error: {exc}"))
+            finally: self.thread=None; self.runtime=None; self.q.put(("status","Disconnected"))
         self.thread=threading.Thread(target=run,daemon=True); self.thread.start(); self.set_status("Connecting")
 
     def show_permission_roles(self, server, role_list, setting_name):
@@ -1166,7 +1096,7 @@ class App:
         for n,role in enumerate(data.get("roles",[])):
             role_list.insert(tk.END,role["name"])
             if role["id"] in allowed: role_list.selection_set(n)
-        summaries={self.chat_roles:self.chat_role_summary,self.link_roles:self.link_role_summary,self.drag_roles:self.drag_role_summary,self.vc_ai_roles:self.vc_ai_role_summary}
+        summaries={self.chat_roles:self.chat_role_summary,self.link_roles:self.link_role_summary,self.drag_roles:self.drag_role_summary}
         self.update_role_summary(role_list, summaries[role_list])
 
     def update_role_summary(self, role_list, label):
@@ -1739,10 +1669,10 @@ class App:
                 kind,data=self.q.get_nowait()
                 if kind=="log": self.logs.config(state="normal"); self.logs.insert(tk.END,data+"\n"); self.logs.see(tk.END); self.logs.config(state="disabled")
                 elif kind=="guilds":
-                    self.guilds=data; values=[f"{name} ({gid})" for gid,name in data]; self.custom_server["values"]=values; self.chat_server["values"]=values; self.link_server["values"]=values; self.drag_server["values"]=values; self.vc_ai_server["values"]=values; self.mod_guild["values"]=values; self.ticket_server["values"]=values; self.voice_server["values"]=values; self.greeting_server["values"]=values; self.level_server["values"]=values; self.counting_server["values"]=values; self.birthday_server["values"]=values; self.notif_server["values"]=values; self.movie_server["values"]=values; self.default_role_server["values"]=values; self.word_block_server["values"]=values; self.discipline_server["values"]=values
-                    if data: self.custom_server.current(0); self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.vc_ai_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0); self.discipline_server.current(0); self.refresh_discipline_users()
+                    self.guilds=data; values=[f"{name} ({gid})" for gid,name in data]; self.custom_server["values"]=values; self.chat_server["values"]=values; self.link_server["values"]=values; self.drag_server["values"]=values; self.mod_guild["values"]=values; self.ticket_server["values"]=values; self.voice_server["values"]=values; self.greeting_server["values"]=values; self.level_server["values"]=values; self.counting_server["values"]=values; self.birthday_server["values"]=values; self.notif_server["values"]=values; self.movie_server["values"]=values; self.default_role_server["values"]=values; self.word_block_server["values"]=values; self.discipline_server["values"]=values
+                    if data: self.custom_server.current(0); self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0); self.discipline_server.current(0); self.refresh_discipline_users()
                     self.set_status("Connected")
-                elif kind=="guild": self.info[data["id"]]=data; self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.show_vc_ai_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks(); self.refresh_discipline_users()
+                elif kind=="guild": self.info[data["id"]]=data; self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks(); self.refresh_discipline_users()
                 elif kind=="ticket_moderator_verified":
                     user_id = data["id"]
                     if user_id in self.ticket_moderator_ids:
@@ -1764,7 +1694,7 @@ class App:
                         # Keep every settings tab aligned with Cloudflare R2, not only
                         # permission and Auto Role tabs. This is the same shared
                         # document Railway reads on its 10-second refresh cycle.
-                        self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.show_vc_ai_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks()
+                        self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks()
                         self.header_subtitle.config(text="Settings synchronized from Cloudflare R2",fg=self.SUCCESS)
                 elif kind=="settings_sync_error": self.settings_sync_inflight=False
                 elif kind=="logs_cleared":
@@ -1790,7 +1720,7 @@ class App:
                         self.settings=self.store.get_settings()
                         self.token.delete(0,tk.END); self.token.insert(0,self.settings.get("token",""))
                         self.auto.set(bool(self.settings.get("auto_connect",True)))
-                        self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.show_vc_ai_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks(); self.refresh_discipline_users()
+                        self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks(); self.refresh_discipline_users()
                     except Exception as exc:
                         self.log(f"Imported settings but could not refresh every GUI panel: {exc}")
                     messagebox.showinfo("Backup imported",f"Processed {count} backup items. Matching records and files were restored from the backup. The GUI has reloaded its settings; the connected bot should synchronize shortly.")

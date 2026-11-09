@@ -36,23 +36,13 @@ In the desktop GUI's **Live Logs** tab or header's **All Controls** menu, **Data
    python bot.py
    ```
 
-   Enter the Discord token and click **Save to Cloudflare R2**. Connect the GUI once to load server roles, then choose allowed roles in the relevant permissions tab and save them. Chat roles can use `/chat`; VC AI roles can use `/call`. Changes are encrypted, logged, and Railway sees them within about 10 seconds.
+   Enter the Discord token and click **Save to Cloudflare R2**. Connect the GUI once to load its server roles, then select allowed roles in **Command Permissions** and save them. Those roles can use `/chat` (and share links); changes are encrypted, logged, and Railway sees them within 10 seconds.
 
 Enable **Message Content Intent** and **Server Members Intent** in the Discord Developer Portal. The generated invite requests **Administrator** permission, which is required for temporary-room creation, permission changes, and moving members.
-
-## VC AI slash assistant
-
-The GUI's **VC AI Permissions** tab controls who may start `/call`. A permitted caller runs `/call` in a server text channel while connected to voice; the bot joins and listens only to that caller. Speak naturally in English, Bangla, or Banglish and it sends the utterance to Gemini, then speaks an English answer with Edge TTS (default `en-US-AnaNeural`, configurable with `VC_AI_VOICE`). Each generated answer MP3 is briefly saved encrypted in shared Cloudflare R2, read back for Discord playback, and deleted after playback ends; the caller's microphone recording is not stored. Running `/call` again stops the session; five minutes without speech disconnects automatically. Assistant handling and AI-triggered Discord actions live in `cmd.py`. It supports general answers, spoken `kick`, `ban`, and `move` requests, plus posting requested text to a named server channel. Before kick/ban/move, it asks for missing names, checks for a unique member/channel, then asks for spoken yes/no confirmation. Mentions are disabled on posted messages and the protected admin cannot be kicked or banned. Other bot commands requested in speech are explained by Gemini but not executed. Google Search grounding is available to Gemini and may consume search quota or incur charges under Google's current pricing. Voice audio is sent to Gemini only while `/call` is active.
-
-Save the Gemini key in the GUI's **VC AI Permissions** tab. The GUI stores it in Fernet-encrypted shared Cloudflare settings, and both the desktop bot and Railway worker fetch it from there automatically. `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) in the process environment and local `.env` remain fallbacks. Optionally set `VC_AI_MODEL` (default `gemini-3.8-flash`) and `VC_AI_VOICE` in the same GUI panel; those two preferences are saved to the local `.env`. The bot uses Gemini's `generateContent` REST API with a JSON response schema. Deploy the worker after updating so it can use the shared key. The API key is encrypted at rest with the same `BOT_ENCRYPTION_KEY` as the other shared settings and is never written to bot logs. The desktop GUI and Railway worker can stay connected together using the same saved Discord token and Cloudflare configuration; shared claims guard voice-call dispatch and scheduled actions against duplicates.
 
 ## Discipline voice restrictions
 
 In the desktop GUI, open **Discipline**, choose a server, enter the member's Discord user ID, and set the daily restriction start and end using AM/PM. The schedule uses Bangladesh time (`Asia/Dhaka`) every day. The bot disconnects the member when they join voice during the restricted interval and checks connected voice members every 20 seconds so it also disconnects them when the interval begins. Rules are saved with the shared settings and Railway picks them up on its normal 10-second settings refresh. The bot needs permission to move members (the standard invite requests Administrator).
-
-## Text Send (`/chat`)
-
-In a server text channel, a member with a role selected in the GUI's **Chat Permissions** tab can run `/chat`. It opens the existing private form and sends the submitted message in that same channel. This is separate from `/call`, which starts the voice AI assistant.
 
 ## Shared application configuration
 
@@ -82,6 +72,10 @@ Do not put a bot token, Cloudflare R2 credential, or encryption key in this text
 5. Set the same `CLOUDFLARE_ACCOUNT_ID`, `D1_DATABASE_ID`, `D1_API_TOKEN`, `BOT_CONTROL_ID`, `BOT_ENCRYPTION_KEY`, and R2 credentials in the GUI computer's `.env`. Railway refreshes settings every 10 seconds. Run only one live Discord connection for the token: leave the GUI disconnected after configuration so Railway remains the active bot.
 
 6. In Railway Service Settings, set **Restart Policy** to **Always** and use a paid Railway plan. Railway's free/trial plans do not support the Always policy, so they cannot promise 24-hour uptime. Deploy. The worker reconnects to Discord after errors and Railway restarts the container if it stops.
+
+## Text Send (`/chat`)
+
+In any server text channel, a member with a role selected in the GUI's **Command Permissions** tab can run `/chat`. It opens a private form; after entering up to 2,000 characters and pressing **Submit**, the bot posts that text in the same channel. Discord Markdown (for example `**bold**`, `*italic*`, and `` `code` ``) and pasted Unicode font text work in the form. The permission list is the encrypted Cloudflare R2 setting shared by the GUI and Railway, and a short Cloudflare R2 claim prevents duplicate posts during a brief gateway overlap.
 
 ## Activity leveling
 
