@@ -103,6 +103,7 @@ class CloudflareR2Store:
         if name not in {"command_allowed_roles","chat_allowed_roles","link_allowed_roles","drag_allowed_roles"}: raise ValueError("Unknown permission setting.")
         return self._update_settings(lambda v: (v[name].update({str(guild_id):[str(x) for x in role_ids]}), v.__setitem__("settings_revision",int(v.get("settings_revision",0))+1), v)[-1])
     def save_welcome_goodbye_config(self,guild_id,config): return self._update_settings(lambda v:(v["welcome_goodbye"].update({str(guild_id):dict(config)}),v.__setitem__("settings_revision",int(v.get("settings_revision",0))+1),v)[-1])
+    def save_leveling_config(self,guild_id,config): return self._update_settings(lambda v:(v["leveling"].update({str(guild_id):dict(config)}),v.__setitem__("settings_revision",int(v.get("settings_revision",0))+1),v)[-1])
     def save_ticket_moderators(self,guild_id,user_ids):
         ids=list(dict.fromkeys(str(x) for x in user_ids if str(x).isdigit()))
         def f(v):
@@ -122,7 +123,7 @@ class CloudflareR2Store:
 
     def _claim(self, collection, ident, predicate, value):
         return self._atomic(collection,ident,lambda cur: False if predicate(cur or {}) else (self._put(collection,ident,value),True)[1],{})
-    def claim_member_greeting(self,guild_id,member_id,kind,window_seconds=60): return self._claim("greeting_event_state",f"{guild_id}_{member_id}_{kind}",lambda x:time.time()-float(x.get("at",0))<window_seconds,{"at":time.time()})
+    def claim_member_greeting(self,guild_id,member_id,kind,window_seconds=300): return self._claim("greeting_event_state",f"{guild_id}_{member_id}_{kind}",lambda x:time.time()-float(x.get("at",0))<window_seconds,{"at":time.time()})
     def claim_rate_limit(self,action,subject_id,seconds): return self._claim("rate_limits",f"{action}_{subject_id}",lambda x:time.time()-float(x.get("last",0))<seconds,{"last":time.time()})
     def claim_temp_voice_creation(self,guild_id,lobby_id,user_id,seconds=30): return self.claim_rate_limit("temp_voice",f"{guild_id}_{lobby_id}_{user_id}",seconds)
     def release_temp_voice_creation(self,guild_id,lobby_id,user_id): self._put("rate_limits",f"temp_voice_{guild_id}_{lobby_id}_{user_id}",{"last":0})

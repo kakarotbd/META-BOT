@@ -114,6 +114,10 @@ class CloudflareD1Store(CloudflareR2Store):
     def _ensure_schema(self):
         if not self._schema_ready:
             self._query("CREATE TABLE IF NOT EXISTS records (collection TEXT NOT NULL, record_id TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (collection, record_id));")
+            # D1 does not offer a read/modify/write transaction across separate
+            # HTTP requests. This lease table serializes those callbacks across
+            # the desktop GUI and Railway, which share the same database.
+            self._query("CREATE TABLE IF NOT EXISTS operation_locks (lock_key TEXT PRIMARY KEY, expires_at REAL NOT NULL);")
             self._schema_ready = True
             # Retire the removed monitor and voice-session collections, including saved history.
             self._query("DELETE FROM records WHERE collection IN (?,?)", ("member_activity", "member_voice_sessions"))
@@ -148,8 +152,31 @@ class CloudflareD1Store(CloudflareR2Store):
         return result
 
     def _atomic(self, collection, ident, fn, default=None):
+        self._ensure_schema()
         key = f"{collection}:{ident}"
-        lock = self._local_locks.setdefault(key, threading.Lock())
-        with lock:
-            current = self._get(collection, ident)
-            return fn(current if current is not None else default)
+        local_lock = self._local_locks.setdefault(key, threading.Lock())
+        # The local lock reduces D1 polling for calls made by this process; the
+        # conditional UPSERT is the actual cross-process lock.
+        with local_lock:
+            deadline = time.monotonic() + 30
+            acquired = False
+            while time.monotonic() < deadline:
+                now = time.time()
+                result = self._query(
+                    "INSERT INTO operation_locks(lock_key,expires_at) VALUES(?,?) "
+                    "ON CONFLICT(lock_key) DO UPDATE SET expires_at=excluded.expires_at "
+                    "WHERE operation_locks.expires_at < ?",
+                    (key, now + 120, now),
+                )
+                meta = result.get("meta", {})
+                if int(meta.get("changes", 0)) > 0:
+                    acquired = True
+                    break
+                time.sleep(0.1)
+            if not acquired:
+                raise RuntimeError("Cloudflare D1 record is busy; please retry.")
+            try:
+                current = self._get(collection, ident)
+                return fn(current if current is not None else default)
+            finally:
+                self._query("DELETE FROM operation_locks WHERE lock_key=?", (key,))

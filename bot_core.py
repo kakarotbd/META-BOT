@@ -1788,9 +1788,10 @@ class ModeratorBot:
         try:
             claimed = await asyncio.to_thread(self.store.claim_member_greeting, member.guild.id, member.id, kind)
         except Exception as exc:
-            # Greeting must not disappear just because the anti-duplicate store is temporarily unavailable.
-            self.log(f"Could not claim {kind} greeting event; sending once anyway: {exc}")
-            claimed = True
+            # Sending without the shared claim can create a duplicate when both
+            # the GUI and Railway receive the same gateway event.
+            self.log(f"Could not claim {kind} greeting event; skipped to prevent a duplicate: {exc}")
+            return
         if not claimed:
             self.log(f"Skipped duplicate {kind} greeting event for {member} in {member.guild.name}.")
             return

@@ -1260,8 +1260,9 @@ class App:
             "voice_xp_require_others":self.voice_level_require_others.get(),
             "voice_xp_ignore_deafened":self.voice_level_ignore_deafened.get(),
         }
-        self.settings=self.store.save_settings(self.settings)
-        messagebox.showinfo("Saved","Leveling settings (text + voice XP) are encrypted in Cloudflare R2. Railway synchronizes within 10 seconds.")
+        self.settings=self.store.save_leveling_config(guild_id,self.settings["leveling"][guild_id])
+        if self.runtime: self.runtime.settings=self.settings
+        messagebox.showinfo("Saved","Leveling settings (text + voice XP) are encrypted in the shared Cloudflare database. Railway synchronizes within 10 seconds.")
 
     def refresh_greeting_channels(self):
         i=self.greeting_server.current()
@@ -1691,6 +1692,7 @@ class App:
                     self.settings_sync_inflight=False
                     if data.get("settings_revision",0)>self.settings.get("settings_revision",0):
                         self.settings=data
+                        if self.runtime: self.runtime.settings=data
                         # Keep every settings tab aligned with Cloudflare R2, not only
                         # permission and Auto Role tabs. This is the same shared
                         # document Railway reads on its 10-second refresh cycle.
