@@ -1,4 +1,4 @@
-﻿# Encrypted Discord Moderator: GUI + Railway
+# Encrypted Discord Moderator: GUI + Railway
 
 `bot.py` is the desktop GUI controller and `railway_bot.py` is the 24/7 headless Railway worker. They both run the exact same moderation implementation in `bot_core.py` and use the same encrypted Cloudflare D1 database for records and Cloudflare R2 for media. Keep `BOT_CONTROL_ID` and `BOT_ENCRYPTION_KEY` identical on the GUI computer and Railway. Settings saved by the GUI are read by Railway within about 10 seconds.
 
@@ -85,7 +85,7 @@ In the GUI's **Leveling** tab, choose a server and the text channel where level-
 
 XP lives in encrypted Cloudflare R2 and is awarded by a transaction, separately keyed per activity source (text vs. voice). This means the desktop GUI and Railway worker use the same XP, cooldown, and level record for both sources; even if they briefly overlap, one cooldown window for one source can only be claimed once, so leveling stays 100% consistent between the GUI and Railway. Configure with the GUI, then keep one gateway worker (normally Railway) online — the voice XP check runs automatically as part of that same worker, every 15 seconds, with no extra setup.
 
-Members can use **`/leaderboard`** in a server to get a 1920×1840 high-resolution PNG card of the top 10 by lifetime total XP. It includes each member's level and Discord avatar, plus the server name and icon. GUI and Railway read the same encrypted XP records, so the command uses the shared leveling data.
+Members can use **`/leaderboard`** in a server to get a 1920?1840 high-resolution PNG card of the top 10 current server members by lifetime total XP. Members who leave are excluded; if they rejoin, their saved XP puts them back in the ranking. The card includes each member's level and Discord avatar, plus the server name and icon. GUI and Railway use the same leaderboard code and encrypted XP records.
 
 Use **`/help`** in the server for a private, paginated English guide to member commands, channel buttons, voice rooms, leveling, birthdays, tickets, moderation features, and admin setup. The page controls are private to the member who opened the guide.
 

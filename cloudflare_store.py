@@ -290,9 +290,12 @@ class CloudflareR2Store:
             self._put("level_users",key,v); return {"level":v["level"],"old_level":old,"xp":v["xp"],"leveled_up":v["level"]>old}
         return self._atomic("level_users",key,f,{})
 
-    def top_activity_users(self,guild_id,limit=10):
-        """Return a server's highest lifetime-XP records, with deterministic tie breaks."""
-        rows=[value for _,value,_ in self._list("level_users") if str(value.get("guild_id"))==str(guild_id)]
+    def top_activity_users(self,guild_id,limit=10,member_ids=None):
+        """Return highest lifetime-XP records, optionally limited to current server members."""
+        active_ids=None if member_ids is None else {str(user_id) for user_id in member_ids}
+        rows=[value for _,value,_ in self._list("level_users")
+              if str(value.get("guild_id"))==str(guild_id)
+              and (active_ids is None or str(value.get("user_id")) in active_ids)]
         rows.sort(key=lambda value:(int(value.get("total_xp",0)),int(value.get("level",1)),str(value.get("user_id",""))),reverse=True)
         return rows[:max(1,min(int(limit),100))]
 

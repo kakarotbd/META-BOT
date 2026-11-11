@@ -2218,16 +2218,29 @@ class ModeratorBot:
         async def leaderboard(interaction: discord.Interaction):
             await interaction.response.defer(thinking=True)
             try:
-                records = await asyncio.to_thread(self.store.top_activity_users, interaction.guild.id, 10)
+                # Resolve the live member list from Discord so members who left
+                # are excluded even when this worker's member cache is partial.
+                current_members = {
+                    member.id: member
+                    async for member in interaction.guild.fetch_members(limit=None)
+                }
+                records = await asyncio.to_thread(
+                    self.store.top_activity_users,
+                    interaction.guild.id,
+                    10,
+                    current_members.keys(),
+                )
                 if not records:
                     return await interaction.followup.send("Leveling leaderboard-e ekhono kono XP record nei.", ephemeral=True)
                 entries = []
                 for record in records:
                     member_id = str(record.get("user_id", ""))
-                    member = interaction.guild.get_member(int(member_id)) if member_id.isdigit() else None
+                    member = current_members.get(int(member_id)) if member_id.isdigit() else None
+                    if member is None:
+                        continue
                     entries.append({
-                        "name": member.display_name if member else str(record.get("username") or "Unknown member"),
-                        "avatar_url": str(member.display_avatar.url) if member else str(record.get("avatar_url") or ""),
+                        "name": member.display_name,
+                        "avatar_url": str(member.display_avatar.url),
                         "level": int(record.get("level", 1)),
                         "total_xp": int(record.get("total_xp", 0)),
                     })
