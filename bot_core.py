@@ -723,97 +723,6 @@ class _MovePickerView(discord.ui.View):
         self.add_item(previous_button); self.add_item(next_button)
 
 
-class KickAllView(discord.ui.View):
-    """Paginated, explicitly confirmed member picker for /kickall."""
-    PAGE_SIZE = 25
-
-    def __init__(self, moderator, guild, requester_id, members):
-        super().__init__(timeout=300)
-        self.moderator, self.guild, self.requester_id = moderator, guild, requester_id
-        self.members = list(members)
-        self.selected_ids = set()
-        self.page = 0
-        self.build()
-
-    async def interaction_check(self, interaction):
-        if interaction.user.id == self.requester_id and interaction.user.guild_permissions.administrator:
-            return True
-        await interaction.response.send_message("Only the administrator who opened this picker can use it.", ephemeral=True)
-        return False
-
-    def make_embed(self, review=False):
-        pages = max(1, (len(self.members) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
-        title = "Kick Members — Final Confirmation" if review else "Kick Members — Select Members"
-        desc = (f"You are about to kick **{len(self.selected_ids)}** selected member(s). This cannot be undone."
-                if review else "Select members on each page, or select everyone. Bots and the protected account are excluded.")
-        embed = discord.Embed(title=title, description=desc, colour=discord.Colour.red())
-        embed.set_footer(text=f"Page {self.page + 1} of {pages} • {len(self.selected_ids)} selected • {len(self.members)} eligible")
-        return embed
-
-    def build(self):
-        self.clear_items()
-        current = self.members[self.page * self.PAGE_SIZE:(self.page + 1) * self.PAGE_SIZE]
-        if current:
-            options = [discord.SelectOption(label=m.display_name[:100], value=str(m.id), description=f"@{m.name}"[:100], default=m.id in self.selected_ids) for m in current]
-            select = discord.ui.Select(placeholder="Select members on this page", min_values=0, max_values=len(options), options=options)
-            select.callback = self.update_selection
-            self.add_item(select)
-        pages = max(1, (len(self.members) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
-        self.add_page_buttons(self.page, pages)
-        all_button = discord.ui.Button(label="Select All", style=discord.ButtonStyle.danger, row=2)
-        clear_button = discord.ui.Button(label="Clear Selection", style=discord.ButtonStyle.secondary, row=2)
-        review_button = discord.ui.Button(label="Review Kick", style=discord.ButtonStyle.primary, row=3, disabled=not self.selected_ids)
-        all_button.callback = self.select_all
-        clear_button.callback = self.clear_selection
-        review_button.callback = self.review
-        self.add_item(all_button); self.add_item(clear_button); self.add_item(review_button)
-
-    def add_page_buttons(self, page, pages):
-        if pages <= 1: return
-        prev = discord.ui.Button(label="Previous", style=discord.ButtonStyle.secondary, disabled=page <= 0, row=1)
-        nxt = discord.ui.Button(label="Next", style=discord.ButtonStyle.secondary, disabled=page >= pages - 1, row=1)
-        prev.callback = self.previous_page; nxt.callback = self.next_page
-        self.add_item(prev); self.add_item(nxt)
-
-    async def update_selection(self, interaction):
-        page_members = self.members[self.page * self.PAGE_SIZE:(self.page + 1) * self.PAGE_SIZE]
-        self.selected_ids.difference_update(m.id for m in page_members)
-        self.selected_ids.update(map(int, interaction.data.get("values", [])))
-        self.build(); await interaction.response.edit_message(embed=self.make_embed(), view=self)
-
-    async def select_all(self, interaction):
-        self.selected_ids = {m.id for m in self.members}
-        self.build(); await interaction.response.edit_message(embed=self.make_embed(), view=self)
-
-    async def clear_selection(self, interaction):
-        self.selected_ids.clear(); self.build(); await interaction.response.edit_message(embed=self.make_embed(), view=self)
-
-    async def previous_page(self, interaction):
-        self.page = max(0, self.page - 1); self.build(); await interaction.response.edit_message(embed=self.make_embed(), view=self)
-
-    async def next_page(self, interaction):
-        self.page = min((len(self.members) - 1) // self.PAGE_SIZE, self.page + 1); self.build(); await interaction.response.edit_message(embed=self.make_embed(), view=self)
-
-    async def review(self, interaction):
-        if not self.selected_ids:
-            return await interaction.response.send_message("Select at least one member first.", ephemeral=True)
-        self.clear_items()
-        confirm = discord.ui.Button(label=f"Confirm kick ({len(self.selected_ids)})", style=discord.ButtonStyle.danger)
-        back = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary)
-        confirm.callback = self.confirm_kick; back.callback = self.back
-        self.add_item(confirm); self.add_item(back)
-        await interaction.response.edit_message(embed=self.make_embed(review=True), view=self)
-
-    async def back(self, interaction):
-        self.build(); await interaction.response.edit_message(embed=self.make_embed(), view=self)
-
-    async def confirm_kick(self, interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        kicked, skipped = await self.moderator.kick_members(self.guild.id, self.selected_ids, f"/kickall requested by {interaction.user}")
-        self.stop()
-        await interaction.followup.send(f"Kick complete: **{kicked}** kicked, **{skipped}** skipped (left, protected, role hierarchy, or Discord permission).", ephemeral=True)
-
-
 class MoveActiveVCView(_MovePickerView):
     """First step: show only voice channels currently occupied by human members."""
     PAGE_SIZE=25
@@ -2362,25 +2271,6 @@ class ModeratorBot:
                 return await interaction.response.send_message("There are no occupied voice channels with human members right now.", ephemeral=True)
             view = MoveActiveVCView(self, interaction.guild, interaction.user.id, active_channels)
             await interaction.response.send_message(embed=view.make_embed(), ephemeral=True, view=view)
-
-        @bot.tree.command(name="kickall", description="Select server members and kick them after confirmation")
-        @app_commands.guild_only()
-        async def kickall(interaction: discord.Interaction):
-            if not interaction.user.guild_permissions.administrator:
-                return await interaction.response.send_message("Only server administrators can use /kickall.", ephemeral=True)
-            if not interaction.guild.me.guild_permissions.kick_members:
-                return await interaction.response.send_message("The bot needs the Kick Members permission.", ephemeral=True)
-            await interaction.response.defer(ephemeral=True, thinking=True)
-            try:
-                members = [m async for m in interaction.guild.fetch_members(limit=None)
-                           if not m.bot and m.id not in PROTECTED_USER_IDS
-                           and interaction.guild.me.top_role > m.top_role]
-            except discord.HTTPException as exc:
-                return await interaction.followup.send(f"Could not load the full member list: {exc}", ephemeral=True)
-            if not members:
-                return await interaction.followup.send("There are no eligible members to kick.", ephemeral=True)
-            view = KickAllView(self, interaction.guild, interaction.user.id, members)
-            await interaction.followup.send(embed=view.make_embed(), view=view, ephemeral=True)
         return bot
 
     async def run(self, token):
@@ -2634,33 +2524,6 @@ class ModeratorBot:
         elif action == "ban": await member.ban(reason=reason or "GUI moderation action", delete_message_seconds=0)
         else: raise RuntimeError("Unsupported moderation action.")
         self.log(f"{action.title()}ed {member} from {guild.name}.")
-
-    async def fetch_guild_members(self, guild_id):
-        guild = self.bot.get_guild(int(guild_id))
-        if not guild: raise RuntimeError("Guild is not available to this GUI bot.")
-        members = [m async for m in guild.fetch_members(limit=None) if not m.bot]
-        return [{"id": str(m.id), "name": str(m), "display_name": m.display_name,
-                 "eligible": m.id not in PROTECTED_USER_IDS and guild.me.top_role > m.top_role}
-                for m in members]
-
-    async def kick_members(self, guild_id, user_ids, reason="GUI bulk kick"):
-        guild = self.bot.get_guild(int(guild_id))
-        if not guild: raise RuntimeError("Guild is not available to this bot.")
-        if not guild.me.guild_permissions.kick_members: raise RuntimeError("The bot needs the Kick Members permission.")
-        kicked = skipped = 0
-        for user_id in set(map(int, user_ids)):
-            if user_id in PROTECTED_USER_IDS:
-                skipped += 1; continue
-            try:
-                member = guild.get_member(user_id) or await guild.fetch_member(user_id)
-                if member.bot or guild.me.top_role <= member.top_role:
-                    skipped += 1; continue
-                await member.kick(reason=reason); kicked += 1
-                await asyncio.sleep(0.35)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                skipped += 1
-        self.log(f"Bulk kick in {guild.name}: kicked {kicked}, skipped {skipped}.")
-        return kicked, skipped
 
 class TempVoiceInviteModal(discord.ui.Modal, title="Invite member to temporary VC"):
     def __init__(self, moderator, channel_id):

@@ -365,57 +365,13 @@ class App:
 
     def moderation_ui(self):
         f=self.moderation_tab
-        tk.Label(f,text="Connect the GUI bot first. Select members from the live server list or use the single-member actions.").pack(pady=(15,8))
+        tk.Label(f,text="Connect the GUI bot first. Enter the Discord member ID and a reason.").pack(pady=(25,8))
         tk.Label(f,text="Server").pack(); self.mod_guild=ttk.Combobox(f,state="readonly",width=55); self.mod_guild.pack()
-        self.mod_guild.bind("<<ComboboxSelected>>",lambda event:self.refresh_moderation_members())
-        member_actions=tk.Frame(f); member_actions.pack(pady=(8,3))
-        tk.Button(member_actions,text="Refresh member list",command=self.refresh_moderation_members).grid(row=0,column=0,padx=5)
-        tk.Button(member_actions,text="Select all",command=self.select_all_moderation_members).grid(row=0,column=1,padx=5)
-        tk.Button(member_actions,text="Clear selection",command=lambda:self.mod_member_tree.selection_remove(self.mod_member_tree.selection())).grid(row=0,column=2,padx=5)
-        tk.Button(member_actions,text="Kick selected members",command=self.kick_selected_members).grid(row=0,column=3,padx=5)
-        self.mod_member_tree=ttk.Treeview(f,columns=("name","id","status"),show="headings",height=10,selectmode="extended")
-        for column,label,width in (("name","Member",280),("id","Discord ID",190),("status","Kick status",170)):
-            self.mod_member_tree.heading(column,text=label); self.mod_member_tree.column(column,width=width,anchor="w")
-        self.mod_member_tree.pack(fill="both",expand=True,padx=22,pady=(3,8))
-        self.mod_member_status=tk.Label(f,text="Refresh to load all current non-bot server members.",fg=self.MUTED); self.mod_member_status.pack()
         tk.Label(f,text="Member ID").pack(pady=(12,2)); self.member_id=tk.Entry(f,width=45); self.member_id.pack()
         tk.Label(f,text="Reason").pack(pady=(12,2)); self.mod_reason=tk.Entry(f,width=70); self.mod_reason.pack()
         row=tk.Frame(f); row.pack(pady=18)
         tk.Button(row,text="Kick member",command=lambda:self.moderate("kick"),width=20).grid(row=0,column=0,padx=8)
         tk.Button(row,text="Ban member",command=lambda:self.moderate("ban"),width=20).grid(row=0,column=1,padx=8)
-
-    def refresh_moderation_members(self):
-        index=self.mod_guild.current()
-        if index<0:return messagebox.showwarning("Server missing","Select a server first.")
-        if not self.runtime or not self.runtime.loop:return messagebox.showwarning("GUI bot offline","Connect the GUI bot first to load server members.")
-        guild_id=self.guilds[index][0]; self.mod_member_status.config(text="Loading current server members from Discord…")
-        future=asyncio.run_coroutine_threadsafe(self.runtime.fetch_guild_members(guild_id),self.runtime.loop)
-        def done(task):
-            try:self.q.put(("moderation_members",(guild_id,task.result())))
-            except Exception as exc:self.q.put(("moderation_members_error",str(exc)))
-        future.add_done_callback(done)
-
-    def select_all_moderation_members(self):
-        rows=self.mod_member_tree.get_children()
-        if rows:self.mod_member_tree.selection_set(rows)
-
-    def kick_selected_members(self):
-        if not self.runtime or not self.runtime.loop:return messagebox.showwarning("GUI bot offline","Connect the GUI bot first to kick members.")
-        rows=self.mod_member_tree.selection()
-        if not rows:return messagebox.showwarning("Members missing","Select one or more members from the live list first.")
-        selected=[self.mod_member_tree.item(row,"values") for row in rows]
-        eligible=[row for row in selected if row[2]=="Eligible"]
-        if not eligible:return messagebox.showwarning("No eligible members","Selected members are protected or above the bot's role.")
-        if not messagebox.askyesno("Confirm bulk kick",f"Kick {len(eligible)} selected eligible member(s)? This cannot be undone."):
-            return
-        index=self.mod_guild.current(); guild_id=self.guilds[index][0]
-        ids=[row[1] for row in eligible]
-        self.mod_member_status.config(text=f"Kicking {len(ids)} selected members…")
-        future=asyncio.run_coroutine_threadsafe(self.runtime.kick_members(guild_id,ids,self.mod_reason.get().strip() or "GUI bulk kick"),self.runtime.loop)
-        def done(task):
-            try:self.q.put(("moderation_kick_done",task.result()))
-            except Exception as exc:self.q.put(("moderation_members_error",str(exc)))
-        future.add_done_callback(done)
 
     def word_block_ui(self):
         f=self.word_block_tab
@@ -1718,20 +1674,6 @@ class App:
                     if data: self.custom_server.current(0); self.chat_server.current(0); self.link_server.current(0); self.drag_server.current(0); self.mod_guild.current(0); self.ticket_server.current(0); self.voice_server.current(0); self.greeting_server.current(0); self.level_server.current(0); self.counting_server.current(0); self.birthday_server.current(0); self.notif_server.current(0); self.movie_server.current(0); self.default_role_server.current(0); self.discipline_server.current(0); self.refresh_discipline_users()
                     self.set_status("Connected")
                 elif kind=="guild": self.info[data["id"]]=data; self.refresh_custom_commands_ui(); self.show_chat_roles(); self.show_link_roles(); self.show_drag_roles(); self.refresh_ticket_channels(); self.refresh_voice_channels(); self.refresh_greeting_channels(); self.refresh_level_channels(); self.refresh_counting_channels(); self.refresh_birthday_channels(); self.refresh_notif_ui(); self.refresh_movie_ui(); self.refresh_default_role_ui(); self.refresh_word_blocks(); self.refresh_discipline_users()
-                elif kind=="moderation_members":
-                    guild_id,members=data
-                    if self.mod_guild.current()>=0 and str(self.guilds[self.mod_guild.current()][0])==str(guild_id):
-                        self.mod_member_tree.delete(*self.mod_member_tree.get_children())
-                        for member in members:
-                            eligible=member["eligible"]
-                            self.mod_member_tree.insert("","end",values=(member["display_name"],member["id"],"Eligible" if eligible else "Protected / role too high"))
-                        eligible_count=sum(bool(member["eligible"]) for member in members)
-                        self.mod_member_status.config(text=f"{len(members)} current non-bot members loaded • {eligible_count} eligible to kick")
-                elif kind=="moderation_members_error": self.mod_member_status.config(text=f"Could not load or kick members: {data}")
-                elif kind=="moderation_kick_done":
-                    kicked,skipped=data
-                    self.mod_member_status.config(text=f"Kick finished • {kicked} kicked • {skipped} skipped. Refresh to update the list.")
-                    messagebox.showinfo("Bulk kick complete",f"{kicked} member(s) kicked. {skipped} skipped.")
                 elif kind=="ticket_moderator_verified":
                     user_id = data["id"]
                     if user_id in self.ticket_moderator_ids:
