@@ -2,34 +2,59 @@
 
 MetaBot is a Discord community bot with a Windows desktop control panel. Configure it in the panel and keep it online with the included Railway worker. Both use the same Cloudflare database and file storage.
 
+![MetaBot animated banner](docs/metabot-banner.gif)
+
 > **Security:** An earlier `.env.example` contained live-looking credentials. If you used or published those values, revoke or rotate the Discord and Cloudflare credentials before deployment. The template now contains placeholders only.
 
 ## Features
 
-- **Chat and announcements:** send a message through a form, schedule role notifications, post movie announcements, and create custom GIF slash commands.
-- **Community:** welcome and goodbye messages, birthday collection and wishes, counting channels, automatic roles, text and voice XP, and an XP leaderboard.
-- **Moderation:** link and blocked-word rules, warnings, timeouts, kicks, and bans. The configured administrator is protected from the bot's kick and ban commands.
-- **Bot anti-spam:** checks visible server messages from bots for mass mentions, rapid bursts, and repeated messages. It tries to ban the suspected bot and sends an alert to the configured administrator. It cannot see private DMs.
-- **Tickets:** ticket panels, private channels, staff assignment and transfer, notes, closing, member ratings, and staff rating summaries.
-- **Voice:** temporary rooms, room controls, member moves, and drag permissions.
-- **Control panel:** settings, connection status, live logs, database usage, and JSON backup export/import.
-
-The desktop panel has tabs for Overview, GIF Commands, Chat, Link Send, Drag Permissions, Tickets, Voice, Greetings, Leveling, Counting, Birthdays, Notifications, Movies, Auto Roles, Moderation, Word Block, and Live Logs. Use **All Controls** to jump to a tab.
-
-## Discord commands
-
-Use these commands in the configured server:
-
-| Command | Description |
+| Area | What MetaBot does |
 | --- | --- |
-| `/help` | Browse the feature guide. |
-| `/chat` | Open a form to post in the current channel. |
-| `/leaderboard` | Show the top 10 members by total XP. |
-| `/move` | Select members and move them to a voice channel. |
-| Custom GIF slash commands | Run commands created in the GIF Commands tab. |
-| DM `start` | A configured ticket staff member can request a support rating summary. |
+| Custom GIF reactions | Add your own member-targeting slash commands, such as `/kiss` and `/slap`, with GIF links in the desktop GUI. |
+| Chat and link controls | Let selected roles use `/chat`; choose which roles can post links. Discord invite links are always blocked. |
+| Tickets | Post a ticket panel, collect a category and issue, create a private support channel, assign or transfer staff, add notes, resolve or close, and collect member ratings. Staff can see their rating summary in DMs. Unanswered tickets receive staff reminders. |
+| Birthdays | Let members add or change their birthday privately; send birthday wishes to a chosen channel and mention selected roles. |
+| Greetings and roles | Send welcome and goodbye messages, optionally with a saved image; give selected default roles to new members and apply them to current members. |
+| Leveling | Award XP for eligible text and voice activity, post level-up messages, and show a top 10 image leaderboard. Configure XP amounts and cooldowns; voice XP can require another person and skip deafened users. |
+| Counting | Set a counting channel, keep the next-number sequence, and reset its count from the GUI. |
+| Temporary voice | Create a private room when a member joins the chosen lobby. The owner can lock or unlock it, rename it, set a member limit, and invite someone. Empty rooms are removed. |
+| Member moves | Allow selected roles to use `/move` to pick active voice members and move them. The GUI also controls who may use drag permissions. |
+| Scheduled posts | Send role notifications every day, on selected weekdays, or on a selected date. Schedule a one-time movie announcement with a title, text, poster, and role mentions. |
+| Moderation | Use the GUI to kick or ban a member by Discord ID and reason. The configured administrator cannot be kicked or banned by this bot. |
+| Blocked words | Delete messages that match configured blocked words. Repeated violations can lead to an automatic ban after five strikes. |
+| Bot anti-spam | Check server messages from bots for mass mentions, mention floods, rapid bursts, and repeated messages. The bot attempts a ban and alerts the configured administrator. It cannot see private DMs. |
+| Control panel and storage | View connection status and live logs, check database usage, export/import a JSON backup, and share saved settings with the Railway worker. |
 
-The code sets `!` as a message-command prefix, but it does not register user-facing `!` commands. Use the slash commands above.
+The Windows desktop panel has these tabs: **Overview, GIF Commands, Chat, Link Send, Drag Permissions, Tickets, Voice, Greetings, Leveling, Counting, Birthdays, Notifications, Movies, Auto Roles, Moderation, Word Block,** and **Live Logs**. Use **All Controls** to jump to a tab. The Overview also has database usage and backup export/import controls.
+
+## Every Discord command
+
+These are the built-in commands registered with Discord:
+
+| Command | What it does | Who can use it |
+| --- | --- | --- |
+| `/help` | Opens a private guide with pages about bot features. | Server members |
+| `/chat` | Opens a form to post a message in the current channel. | Members with a role allowed in the GUI's **Chat** tab |
+| `/leaderboard` | Posts an image of the top 10 members by total XP. | Server members |
+| `/move` | Opens a private member and voice-channel picker to move members. | Members with a role allowed in **Drag Permissions**; the bot needs Move Members permission |
+| Custom slash commands, for example `/kiss` or `/slap` | Picks a target member and posts one of the GIFs saved for that command. | Server members |
+
+There are no built-in `!` prefix commands. The desktop panel also has GUI actions such as moderation, database usage, log loading, and backup export/import; those are buttons, not Discord commands.
+
+### Add `/kiss`, `/slap`, or another GIF command
+
+1. Open the desktop panel, connect the bot, and select your server.
+2. Open **GIF Commands**.
+3. Enter a lowercase command name, such as `kiss` or `slap`.
+4. Paste one or more GIF URLs, with one URL on each line.
+5. Select **Save / update command**.
+6. In Discord, run `/kiss` or `/slap` and choose the member when Discord asks for a target.
+
+Use only lowercase letters, numbers, `_`, or `-` in command names (up to 32 characters). Add at least one `http://` or `https://` GIF URL. The bot cycles through the saved GIFs in shuffled order. Discord may take a few seconds to show a new command; the Railway worker syncs saved settings within about 10 seconds.
+
+Ticket and birthday flows use buttons posted in the channels configured by the server admin: **Create Ticket** and **Add Birthday**. Temporary voice rooms also show owner control buttons. These are interactive buttons, not slash commands.
+
+Configured ticket staff can DM the bot `start` or `star` to get their support rating summary. Other users do not get this summary.
 
 ## Requirements
 
