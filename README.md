@@ -1,4 +1,4 @@
-# MetaBot â€” Free All-Rounder Discord Bot
+# MetaBot Free All-Rounder Discord Bot
 
 <p align="center">
   <img src="docs/metabot-banner.gif" alt="MetaBot â€” Free all-rounder Discord bot" width="100%">
