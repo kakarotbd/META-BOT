@@ -1,4 +1,5 @@
-# Shared public application metadata. Used by bot.py and railway_bot.py.
-# Keep secrets (Discord token, Cloudflare R2 key) in .env / Railway Variables, never here.
-BOT_APP_NAME=META BOT
+# Shared public application metadata used by the desktop GUI and hosted worker.
+# Keep secrets (Discord token, Cloudflare R2 key) in .env / host platform variables, never here.
+BOT_APP_NAME=MetaBot
+BOT_APP_TAGLINE=Free all-rounder Discord bot
 LOGO_PATH=assets/logo.png
