@@ -1,6 +1,0 @@
-.env
-(removed: Firebase credentials are no longer used)
-bot_config.json
-link_warnings.json
-__pycache__/
-*.pyc
