@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import functools
 import io
 import os
@@ -31,6 +32,8 @@ from features.voice import TempVoiceNameModal, TempVoiceLimitModal, TempVoiceCon
 from features.move import MoveActiveVCView, DragMemberView, DragTargetView
 from features.help import HELP_PAGES, make_help_embeds, HelpPagerView
 from features.anti_spam import BotSpamGuard
+from features.custom_slash import CustomSlashCommands
+from features.word_block import WordBlockFeature
 
 LINK_PATTERN = re.compile(r"(https?://\S+|www\.\S+|discord\.gg/\S+|\S+\.(com|net|org|io|xyz|gg)\S*)", re.I)
 DISCORD_INVITE_PATTERN = re.compile(r"(?:https?://)?(?:www\.)?(?:discord\.gg|discord(?:app)?\.com/invite)/[A-Za-z0-9-]+", re.I)
@@ -50,17 +53,25 @@ EXTERNAL_GUILD_OWNER_NOTICE = (
 
 
 class ModeratorBot:
-    """The single moderation implementation shared by GUI and Railway."""
+    """Coordinate Discord events and feature modules for GUI and Railway."""
     def __init__(self, store, source, log=print, event=None):
         self.store, self.source, self.log = store, source, log
         self.event = event or (lambda *_: None)
         self.settings = store.get_settings()
+        self.applied_settings = copy.deepcopy(self.settings)
         self.bot = None
         self.loop = None
         self.last_action, self.actions = {}, []
         self.counting_locks = {}
         self.open_ticket_channels = {}
         self.dashboard_views_registered = set()
+        self.protected_user_ids = set(PROTECTED_USER_IDS)
+        self.custom_slash_commands = CustomSlashCommands(self.log)
+        self.custom_commands_registered = copy.deepcopy(
+            self.settings.get("custom_commands", {})
+        )
+        self.word_block = WordBlockFeature(self)
+        self.custom_command_sync_lock = asyncio.Lock()
         # `on_ready` may be called again after a Discord gateway resume. The
         # GUI inventory should be refreshed each time, but background loops must
         # only exist once or a reconnect would create duplicate workers.
@@ -207,47 +218,6 @@ class ModeratorBot:
             "voice_xp_ignore_deafened": bool(config.get("voice_xp_ignore_deafened", True)),
         }
 
-    def blocked_words(self, guild_id):
-        """Return the shared per-server word-block list, normalized for matching."""
-        return list(dict.fromkeys(
-            str(word).strip().casefold()
-            for word in self.settings.get("word_blocks", {}).get(str(guild_id), [])
-            if str(word).strip()
-        ))
-
-    async def handle_word_block(self, message):
-        """Delete a blocked message and permanently ban at the fifth shared strike."""
-        content = message.content.casefold()
-        matched = next((word for word in self.blocked_words(message.guild.id)
-                        if re.search(rf"(?<!\w){re.escape(word)}(?!\w)", content)), None)
-        if not matched:
-            return False
-        try:
-            violation = await asyncio.to_thread(
-                self.store.record_word_block_violation, message.guild.id, message.author.id, matched, message.id,
-            )
-            if violation.get("duplicate"):
-                return True
-            strikes = int(violation["count"])
-        except Exception as exc:
-            self.log(f"Could not record blocked-word violation in {message.guild.name}: {exc}")
-            return False
-        try:
-            await message.delete()
-        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-            pass
-        if strikes < 5:
-            self.log(f"Blocked word '{matched}' from {message.author} in {message.guild.name} ({strikes}/5).")
-            return True
-        if message.author.id in PROTECTED_USER_IDS:
-            self.log(f"Blocked-word threshold reached by protected user {message.author}; ban skipped.")
-            return True
-        try:
-            await message.author.ban(reason=f"Permanent ban: 5 blocked-word violations (latest: {matched})", delete_message_seconds=0)
-            self.log(f"Permanently banned {message.author} in {message.guild.name} after {strikes} blocked-word violations.")
-        except (discord.Forbidden, discord.HTTPException) as exc:
-            self.log(f"Could not ban blocked-word spammer {message.author} in {message.guild.name}: {exc}")
-        return True
     def default_role_ids(self, guild_id):
         """Return the configured auto-role ids for a server (strings)."""
         return list(self.settings.get("default_roles", {}).get(str(guild_id), []))
@@ -1060,54 +1030,52 @@ class ModeratorBot:
                 self.log(f"Could not post ticket dashboard in {guild.name}: {exc}")
 
 
-    @staticmethod
-    def _valid_custom_command_name(name):
-        return bool(re.fullmatch(r"[a-z0-9_-]{1,32}", str(name).strip().lower()))
-
-    def _custom_command_names(self):
-        return {str(name) for commands in self.settings.get("custom_commands", {}).values() for name in commands}
-
-    def _next_custom_gif(self, guild_id, command_name, urls):
-        """Return each configured GIF once per shuffled cycle, then reshuffle."""
-        import random
-        cycles = getattr(self, "_custom_gif_cycles", None)
-        if cycles is None:
-            cycles = self._custom_gif_cycles = {}
-        key = (str(guild_id), str(command_name))
-        source = tuple(urls)
-        state = cycles.get(key)
-        if not state or state["source"] != source or not state["remaining"]:
-            remaining = list(source)
-            random.shuffle(remaining)
-            state = {"source": source, "remaining": remaining}
-            cycles[key] = state
-        return state["remaining"].pop()
-
     def _register_custom_commands(self, bot):
-        """Register GUI-defined guild slash commands with Discord's native member picker."""
-        for guild_id, commands_config in self.settings.get("custom_commands", {}).items():
-            guild = discord.Object(id=int(guild_id))
-            for raw_name, config in commands_config.items():
-                name = str(raw_name).strip().lower()
-                urls = [str(url).strip() for url in config.get("gifs", []) if str(url).strip().startswith(("http://", "https://"))]
-                if not self._valid_custom_command_name(name) or not urls:
-                    continue
-                def make_callback(bound_config, bound_name):
-                    async def callback(interaction: discord.Interaction, target: discord.Member):
-                        if target.bot:
-                            return await interaction.response.send_message("Please choose a real server member.", ephemeral=True)
-                        selected = [str(url).strip() for url in bound_config.get("gifs", []) if str(url).strip().startswith(("http://", "https://"))]
-                        if not selected:
-                            return await interaction.response.send_message("This command has no GIF links configured.", ephemeral=True)
-                        verb = bound_name
-                        embed = discord.Embed(description=f"{interaction.user.mention} **{verb}** {target.mention}", colour=discord.Colour.blurple())
-                        embed.set_image(url=self._next_custom_gif(interaction.guild.id, bound_name, selected))
-                        await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
-                    return callback
+        """Register GUI-defined slash commands from the shared settings."""
+        self.custom_slash_commands.register(bot, self.settings)
 
-                command = app_commands.Command(name=name, description=str(config.get("description", f"{name} reaction"))[:100], callback=make_callback(config, name))
-                bot.tree.add_command(command, guild=guild, override=True)
-        self.log("Custom GIF slash commands loaded from shared settings.")
+    async def _sync_custom_commands(self, previous_settings, current_settings):
+        async with self.custom_command_sync_lock:
+            await self.custom_slash_commands.sync(
+                self.bot, previous_settings, current_settings
+            )
+            self.custom_commands_registered = copy.deepcopy(
+                current_settings.get("custom_commands", {})
+            )
+
+    async def _apply_settings_update(self, previous_settings, current_settings):
+        if previous_settings.get("custom_commands", {}) != current_settings.get("custom_commands", {}):
+            await self._sync_custom_commands(previous_settings, current_settings)
+        if previous_settings.get("ticket_channels", {}) != current_settings.get("ticket_channels", {}):
+            await self.ensure_ticket_dashboards()
+        if previous_settings.get("birthdays", {}) != current_settings.get("birthdays", {}):
+            await self.ensure_birthday_dashboards()
+
+    def update_settings(self, settings):
+        """Apply settings locally and publish GUI changes to Discord immediately."""
+        previous = self.applied_settings
+        settings_snapshot = copy.deepcopy(settings)
+        self.settings = settings
+        if previous == settings_snapshot:
+            return
+        self.applied_settings = settings_snapshot
+        if self.bot is None or self.loop is None or not self.loop.is_running():
+            return
+
+        future = asyncio.run_coroutine_threadsafe(
+            self._apply_settings_update(previous, settings_snapshot),
+            self.loop,
+        )
+
+        def report_sync_error(done):
+            try:
+                error = done.exception()
+            except asyncio.CancelledError:
+                return
+            if error:
+                self.log(f"Could not apply saved feature settings: {error}")
+
+        future.add_done_callback(report_sync_error)
 
     async def refresh_settings(self):
         while not self.bot.is_closed():
@@ -1115,23 +1083,15 @@ class ModeratorBot:
             try:
                 fresh = self.store.get_settings()
                 if fresh["settings_revision"] != self.settings["settings_revision"]:
-                    channels_changed = fresh.get("ticket_channels") != self.settings.get("ticket_channels")
-                    birthday_channels_changed = fresh.get("birthdays") != self.settings.get("birthdays")
-                    old_custom = self.settings.get("custom_commands", {})
+                    previous = self.applied_settings
                     self.settings = fresh
-                    if fresh.get("custom_commands", {}) != old_custom:
-                        for _gid, _commands in old_custom.items():
-                            _guild = discord.Object(id=int(_gid))
-                            for _name in _commands:
-                                self.bot.tree.remove_command(str(_name), guild=_guild)
-                        self._register_custom_commands(self.bot)
-                        for _guild in self.bot.guilds:
-                            await self.bot.tree.sync(guild=discord.Object(id=_guild.id))
+                    await self._apply_settings_update(previous, fresh)
+                    self.applied_settings = copy.deepcopy(fresh)
                     self.log("Settings synchronized from Cloudflare R2.")
-                    if channels_changed:
-                        await self.ensure_ticket_dashboards()
-                    if birthday_channels_changed:
-                        await self.ensure_birthday_dashboards()
+                elif self.custom_commands_registered != self.settings.get("custom_commands", {}):
+                    await self._sync_custom_commands(
+                        {"custom_commands": self.custom_commands_registered}, self.settings
+                    )
             except Exception as exc:
                 self.log(f"Cloudflare R2 settings refresh failed: {exc}")
 
@@ -1161,6 +1121,10 @@ class ModeratorBot:
                     self.event("guild", self.guild_info(guild))
                 except Exception as exc:
                     self.log(f"Could not load server data for {guild.name}: {exc}")
+            if self.custom_commands_registered != self.settings.get("custom_commands", {}):
+                await self._sync_custom_commands(
+                    {"custom_commands": self.custom_commands_registered}, self.settings
+                )
             if not self.background_tasks_started:
                 self.background_tasks_started = True
                 asyncio.create_task(self.refresh_settings())
@@ -1220,25 +1184,37 @@ class ModeratorBot:
                     return
                 return await bot.process_commands(message)
             if not message.guild:
-                if message.content.strip().casefold() in {"star", "start"}:
+                rating_requests = {
+                    "start", "star", "rating", "ratings", "start rating",
+                    "my rating", "my ratings",
+                }
+                if message.content.strip().casefold() in rating_requests:
                     try:
-                        claimed = await asyncio.to_thread(self.store.claim_rate_limit, "ticket_staff_start", message.author.id, 5)
-                        if not claimed:
-                            return
+                        is_staff = await asyncio.to_thread(
+                            self.store.is_ticket_staff, message.author.id
+                        )
                     except Exception as exc:
-                        self.log(f"Could not claim staff summary request {message.id}: {exc}")
-                        return
-                    staff_ids=set()
-                    for configured in self.settings.get("ticket_moderators",{}).values():
-                        staff_ids.update(map(str,configured))
-                    if str(message.author.id) not in staff_ids:
-                        return await message.channel.send("This staff summary is only available to configured ticket staff.")
+                        self.log(f"Could not verify ticket staff {message.author.id}: {exc}")
+                        return await message.channel.send(
+                            "I could not check your ticket staff access right now. Please try again."
+                        )
+                    if not is_staff:
+                        return await message.channel.send(
+                            "This summary is available to current ticket staff and past ticket assignees."
+                        )
                     try:
                         rating=await asyncio.to_thread(self.store.get_ticket_staff_rating,message.author.id)
                     except Exception as exc:
                         self.log(f"Could not load ticket rating summary for staff {message.author.id}: {exc}")
-                        return await message.channel.send("Could not load your rating summary right now. Please try again later.")
-                    embed=discord.Embed(title="Your Support Rating Summary",description="Ratings submitted by users after their tickets were closed.",colour=discord.Colour.gold())
+                        return await message.channel.send(
+                            "I could not load your rating summary right now. Please try again in a moment."
+                        )
+                    description=(
+                        "No members have rated your closed tickets yet."
+                        if not rating["reviews"]
+                        else "Ratings submitted by users after their tickets were closed."
+                    )
+                    embed=discord.Embed(title="Your Support Rating Summary",description=description,colour=discord.Colour.gold())
                     embed.add_field(name="Total star points",value=f"**{rating['total_stars']}**",inline=True)
                     embed.add_field(name="Reviews",value=f"**{rating['reviews']}**",inline=True)
                     embed.add_field(name="Average",value=f"**{rating['average']:.2f} / 5**",inline=True)
@@ -1256,7 +1232,7 @@ class ModeratorBot:
                             self.log(f"Staff reply received on ticket #{ticket['ticket_id']}; unanswered-ticket reminders stopped.")
                     except Exception as exc:
                         self.log(f"Could not mark staff reply on ticket #{ticket['ticket_id']}: {exc}")
-            if await self.handle_word_block(message):
+            if await self.word_block.handle_message(message):
                 return
             # Discord invites are always blocked. Discord does not expose an invite's
             # destination without resolving it, so this safely blocks all server invites.
@@ -1592,7 +1568,7 @@ class ModeratorBot:
         embed=discord.Embed(title=f"Ticket Review â€¢ #{ticket.get('ticket_id')}",description=f"**Rating:** {'â­' * stars}{'â˜†' * (5-stars)}  (**{stars}/5**)",colour=discord.Colour.gold())
         embed.add_field(name="From",value=f"{ticket.get('username','User')} (`{review.get('user_id')}`)",inline=False)
         embed.add_field(name="Feedback",value=str(review.get("note") or "No written feedback provided.")[:1000],inline=False)
-        embed.set_footer(text="Type star in this DM to view your total rating points.")
+        embed.set_footer(text="Type 'start rating' in this DM to view your rating summary.")
         await staff.send(embed=embed)
         self.log(f"Delivered {stars}-star review for ticket #{ticket.get('ticket_id')} to assigned staff {staff_id}.")
         return True

@@ -27,6 +27,12 @@ MetaBot is a Discord community bot with a Windows desktop control panel. Configu
 
 The Windows desktop panel has these tabs: **Overview, GIF Commands, Chat, Link Send, Drag Permissions, Tickets, Voice, Greetings, Leveling, Counting, Birthdays, Notifications, Movies, Auto Roles, Moderation, Word Block,** and **Live Logs**. Use **All Controls** to jump to a tab. The Overview also has database usage and backup export/import controls.
 
+## How GUI and Railway stay in sync
+
+The GUI saves feature settings to the shared Cloudflare database and R2 bucket. Railway reads those same settings about every 10 seconds. Custom slash commands saved in the GUI are also registered with Discord by the connected bot. Keep the same `BOT_CONTROL_ID`, encryption key, D1 database, R2 bucket, and Discord token in both environments.
+
+The code is grouped by feature under `features/`: chat, tickets, birthdays, temporary voice, member moves, anti-spam, leaderboard images, help pages, custom slash commands, blocked words, and shared logs each have their own module. `runtime/moderator.py` connects these modules to Discord events and coordinates the shared runtime used by both the GUI and Railway.
+
 ## Every Discord command
 
 These are the built-in commands registered with Discord:
@@ -40,6 +46,36 @@ These are the built-in commands registered with Discord:
 | Custom slash commands, for example `/kiss` or `/slap` | Picks a target member and posts one of the GIFs saved for that command. | Server members |
 
 There are no built-in `!` prefix commands. The desktop panel also has GUI actions such as moderation, database usage, log loading, and backup export/import; those are buttons, not Discord commands.
+
+### Ticket staff rating request (DM message)
+
+Current ticket staff and past ticket assignees can DM the bot any of these exact messages:
+
+| Type this in the bot's DM | Result |
+| --- | --- |
+| `start` | Show your support rating summary. |
+| `star` | Same summary. |
+| `rating` or `ratings` | Same summary. |
+| `start rating` | Same summary. |
+| `my rating` or `my ratings` | Same summary. |
+
+The summary shows your total star points, number of reviews, and average score. If no member has rated one of your closed tickets yet, it shows zero reviews. You can ask again at any time.
+
+### Ticket and voice buttons
+
+These are buttons and forms in Discord, not slash commands:
+
+| Button or form | What it does |
+| --- | --- |
+| **Create Ticket** | Open the support form. Enter a category and describe the issue. The bot sends the ticket privately to staff. |
+| **Cancel Ticket** / **Yes, Cancel Ticket** | Cancel your open ticket after confirming. **Keep Ticket Open** leaves it open. |
+| **Resolved** | Staff marks a ticket resolved and sends the member a note. No rating prompt is sent for this status. |
+| **Closed** | Staff closes a ticket and sends the member a note plus a private 1-to-5-star rating prompt. |
+| **Change Staff** | The assigned staff member transfers an open ticket to another configured staff member. |
+| **1 Star** to **5 Stars** | The ticket owner rates the support and can add optional feedback. Each ticket can be rated once. |
+| **Add Birthday** | Open a private form to add a birthday. If one is already saved, choose whether to change it. |
+| **Lock**, **Unlock**, **Rename**, **Max** | The owner manages their temporary voice room. |
+| Help page buttons | Move through the private `/help` guide. |
 
 ### Add `/kiss`, `/slap`, or another GIF command
 

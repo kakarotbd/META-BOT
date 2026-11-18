@@ -17,6 +17,7 @@ from runtime.moderator import ModeratorBot, DEFAULT_TICKET_CLOSE_NOTE
 from storage.d1_store import CloudflareD1Store
 
 from config.app_config import APP_CONFIG
+from features.log import SharedLogger
 
 
 
@@ -372,6 +373,9 @@ class App:
         self.configure_theme(root); root.title(f"{APP_CONFIG.bot_app_name} Control Center"); root.geometry("1240x820"); root.minsize(1080, 700); self.build_header(root)
 
         self.store = CloudflareD1Store(); self.settings = self.store.get_settings(); self.bot_token = os.getenv("DISCORD_BOT_TOKEN", "").strip(); self.settings_baseline = copy.deepcopy(self.settings); self.guilds, self.info, self.runtime, self.tickets, self.invite_url = [], {}, None, {}, ""
+        self.shared_logger = SharedLogger(
+            self.store, "gui", on_message=lambda text: self.q.put(("log", text))
+        )
 
         self.scroll_regions = {}; self.settings_sync_inflight = False
 
@@ -623,7 +627,7 @@ class App:
 
         self.persist_settings()
 
-        if self.runtime: self.runtime.settings = self.settings
+        if self.runtime: self.runtime.update_settings(self.settings)
 
         self.refresh_custom_commands_ui()
 
@@ -643,7 +647,7 @@ class App:
 
         self.persist_settings()
 
-        if self.runtime: self.runtime.settings = self.settings
+        if self.runtime: self.runtime.update_settings(self.settings)
 
         self.refresh_custom_commands_ui()
 
@@ -1862,7 +1866,7 @@ class App:
 
         self.adopt_settings(self.store.save_default_roles(guild_id, selected))
 
-        if self.runtime: self.runtime.settings = self.settings
+        if self.runtime: self.runtime.update_settings(self.settings)
 
         self.update_role_summary(self.default_role_list, self.default_role_summary)
 
@@ -1941,12 +1945,7 @@ class App:
 
 
     def log(self, message):
-
-        self.q.put(("log",message))
-
-        try: self.store.add_log("gui",message)
-
-        except Exception: pass
+        self.shared_logger(message)
 
 
 
@@ -2177,7 +2176,7 @@ class App:
         self.settings_baseline = copy.deepcopy(settings)
 
         if self.runtime:
-            self.runtime.settings = self.settings
+            self.runtime.update_settings(self.settings)
     def save_connection(self):
 
         if not self.bot_token: messagebox.showwarning("Token missing","Set DISCORD_BOT_TOKEN in your local .env file, then restart the GUI."); return False
@@ -2304,7 +2303,7 @@ class App:
 
         self.adopt_settings(self.store.save_permission_roles(setting_name, guild_id, selected_role_ids))
 
-        if self.runtime: self.runtime.settings = self.settings
+        if self.runtime: self.runtime.update_settings(self.settings)
 
         messagebox.showinfo("Saved", f"{feature_name} permissions encrypted and saved. hosted worker synchronizes within 10 seconds.")
 
@@ -2551,7 +2550,7 @@ class App:
 
         self.adopt_settings(self.store.save_leveling_config(guild_id,self.settings["leveling"][guild_id]))
 
-        if self.runtime: self.runtime.settings=self.settings
+        if self.runtime: self.runtime.update_settings(self.settings)
 
         messagebox.showinfo("Saved","Leveling settings (text + voice XP) are encrypted in the shared Cloudflare database. hosted worker synchronizes within 10 seconds.")
 
@@ -2831,7 +2830,7 @@ class App:
 
             if self.runtime:
 
-                self.runtime.settings = self.settings
+                self.runtime.update_settings(self.settings)
 
             self.welcome_image_path=self.goodbye_image_path=None
 
@@ -2875,7 +2874,7 @@ class App:
 
         self.persist_settings()
 
-        if self.runtime:self.runtime.settings=self.settings
+        if self.runtime:self.runtime.update_settings(self.settings)
 
         messagebox.showinfo("Saved","Counting channel saved. The count starts at 1 in this channel; hosted worker synchronizes within 10 seconds.")
 
@@ -3233,7 +3232,7 @@ class App:
 
         self.persist_settings()
 
-        if self.runtime: self.runtime.settings = self.settings
+        if self.runtime: self.runtime.update_settings(self.settings)
 
         messagebox.showinfo("Saved", f"Saved {len(words)} blocked words. hosted worker synchronizes within 10 seconds.")
 
@@ -3307,7 +3306,7 @@ class App:
 
                         self.settings=data; self.settings_baseline=copy.deepcopy(data)
 
-                        if self.runtime: self.runtime.settings=data
+                        if self.runtime: self.runtime.update_settings(data)
 
                         # Keep every settings tab aligned with Cloudflare R2, not only
 

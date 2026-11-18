@@ -3,6 +3,7 @@ import asyncio
 import os
 
 from config.app_config import APP_CONFIG
+from features.log import SharedLogger
 from runtime.moderator import ModeratorBot
 from storage.d1_store import CloudflareD1Store
 
@@ -15,12 +16,7 @@ async def run_forever(platform):
     else:
         print(f"{APP_CONFIG.bot_app_name}: logo asset missing; {platform} will run headlessly.", flush=True)
 
-    def log(message):
-        print(message, flush=True)
-        try:
-            store.add_log(platform, message)
-        except Exception as exc:
-            print(f"Log upload failed: {exc}", flush=True)
+    log = SharedLogger(store, platform, echo=True)
 
     delay = 5
     while True:

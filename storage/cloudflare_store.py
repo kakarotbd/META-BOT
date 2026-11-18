@@ -302,6 +302,22 @@ class CloudflareR2Store:
         reviews=[review for _,review,_ in self._list("ticket_reviews") if str(review.get("staff_id"))==str(staff_id)]
         total=sum(int(review.get("stars",0)) for review in reviews)
         return {"reviews":len(reviews),"total_stars":total,"average":round(total/len(reviews),2) if reviews else 0.0}
+    def is_ticket_staff(self,staff_id):
+        """Allow current staff and former assignees to view their saved ratings."""
+        staff_id=str(staff_id)
+        settings=self.get_settings()
+        if any(staff_id in list(map(str,staff)) for staff in settings.get("ticket_moderators",{}).values()):
+            return True
+        has_ticket_history=any(
+            str(ticket.get("assigned_moderator_id",""))==staff_id
+            for _,ticket,_ in self._list("tickets")
+        )
+        if has_ticket_history:
+            return True
+        return any(
+            str(review.get("staff_id",""))==staff_id
+            for _,review,_ in self._list("ticket_reviews")
+        )
     def save_ticket_dashboard(self,guild_id,channel_id,message_id): return self._save("ticket_dashboards",guild_id,{"channel_id":str(channel_id),"message_id":str(message_id)})
     def get_ticket_dashboard(self,guild_id): return self._simple("ticket_dashboards",guild_id)
     def save_birthday(self,guild_id,user_id,username,day,month,year): return self._save("birthdays",f"{guild_id}_{user_id}",{"guild_id":str(guild_id),"user_id":str(user_id),"username":username,"day":int(day),"month":int(month),"year":int(year) if year else None})
